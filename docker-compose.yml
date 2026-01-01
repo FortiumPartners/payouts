@@ -37,6 +37,7 @@ services:
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-placeholder}
       - SESSION_SECRET=${SESSION_SECRET:-dev-session-secret}
       - BASE_URL=http://localhost:8005
+      - FRONTEND_URL=http://localhost:3007
       - FPQBO_API_KEY_US=${FPQBO_API_KEY_US:-}
     volumes:
       - ./backend:/app:delegated

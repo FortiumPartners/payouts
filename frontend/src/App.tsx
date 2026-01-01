@@ -122,6 +122,20 @@ function Dashboard() {
 }
 
 function Login() {
+  const params = new URLSearchParams(window.location.search);
+  const error = params.get('error');
+
+  const errorMessages: Record<string, string> = {
+    oauth_failed: 'Google sign-in failed. Please try again.',
+    invalid_state: 'Session expired. Please try again.',
+    no_code: 'Authorization failed. Please try again.',
+    token_failed: 'Failed to complete sign-in. Please try again.',
+    userinfo_failed: 'Failed to get user info. Please try again.',
+    invalid_domain: 'Only @fortiumpartners.com accounts are allowed.',
+    not_authorized: 'Your account is not authorized. Contact an administrator to be added.',
+    auth_failed: 'Authentication failed. Please try again.',
+  };
+
   return (
     <div className="min-h-screen bg-background flex items-center justify-center">
       <div className="rounded-lg border bg-card p-8 max-w-md w-full">
@@ -129,6 +143,11 @@ function Login() {
           <DollarSign className="h-8 w-8" />
           <h1 className="text-2xl font-semibold">Fortium Payouts</h1>
         </div>
+        {error && (
+          <div className="mb-6 p-4 rounded-md bg-red-50 border border-red-200 text-red-800 text-sm">
+            {errorMessages[error] || 'An error occurred. Please try again.'}
+          </div>
+        )}
         <p className="text-center text-muted-foreground mb-6">
           Sign in with your Fortium Partners Google account.
         </p>

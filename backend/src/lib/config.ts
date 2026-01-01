@@ -13,6 +13,7 @@ const envSchema = z.object({
   GOOGLE_ALLOWED_DOMAIN: z.string().default('fortiumpartners.com'),
   SESSION_SECRET: z.string(),
   BASE_URL: z.string().default('http://localhost:8000'),
+  FRONTEND_URL: z.string().default('http://localhost:3007'),
 
   // Integrations
   FPQBO_API_URL: z.string().optional(),

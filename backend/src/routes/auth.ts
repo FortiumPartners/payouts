@@ -53,21 +53,21 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     // Handle OAuth errors
     if (error) {
       fastify.log.error(`OAuth error: ${error}`);
-      return reply.redirect('/login?error=oauth_failed');
+      return reply.redirect(`${config.FRONTEND_URL}/login?error=oauth_failed`);
     }
 
     // Validate state (CSRF protection)
     const storedState = request.cookies.oauth_state;
     if (!state || state !== storedState) {
       fastify.log.warn('OAuth state mismatch');
-      return reply.redirect('/login?error=invalid_state');
+      return reply.redirect(`${config.FRONTEND_URL}/login?error=invalid_state`);
     }
 
     // Clear state cookie
     reply.clearCookie('oauth_state', { path: '/' });
 
     if (!code) {
-      return reply.redirect('/login?error=no_code');
+      return reply.redirect(`${config.FRONTEND_URL}/login?error=no_code`);
     }
 
     try {
@@ -87,7 +87,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       if (!tokenResponse.ok) {
         const errorData = await tokenResponse.text();
         fastify.log.error(`Token exchange failed: ${errorData}`);
-        return reply.redirect('/login?error=token_failed');
+        return reply.redirect(`${config.FRONTEND_URL}/login?error=token_failed`);
       }
 
       const tokens = await tokenResponse.json() as { access_token: string };
@@ -98,7 +98,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       });
 
       if (!userResponse.ok) {
-        return reply.redirect('/login?error=userinfo_failed');
+        return reply.redirect(`${config.FRONTEND_URL}/login?error=userinfo_failed`);
       }
 
       const userInfo = await userResponse.json() as { email: string; name?: string };
@@ -110,7 +110,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       const domain = email.split('@')[1];
       if (domain !== config.GOOGLE_ALLOWED_DOMAIN) {
         fastify.log.warn(`Domain validation failed for ${email}`);
-        return reply.redirect('/login?error=invalid_domain');
+        return reply.redirect(`${config.FRONTEND_URL}/login?error=invalid_domain`);
       }
 
       // Check allowlist (admin_users table)
@@ -120,7 +120,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
 
       if (!adminUser) {
         fastify.log.warn(`Allowlist validation failed for ${email}`);
-        return reply.redirect('/login?error=not_authorized');
+        return reply.redirect(`${config.FRONTEND_URL}/login?error=not_authorized`);
       }
 
       // Update last login
@@ -141,11 +141,11 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       });
 
       fastify.log.info(`Session created for ${email}`);
-      return reply.redirect('/');
+      return reply.redirect(`${config.FRONTEND_URL}/`);
 
     } catch (err) {
       fastify.log.error(err, 'OAuth callback error');
-      return reply.redirect('/login?error=auth_failed');
+      return reply.redirect(`${config.FRONTEND_URL}/login?error=auth_failed`);
     }
   });
 
@@ -154,7 +154,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
    */
   fastify.get('/logout', async (request, reply) => {
     reply.clearCookie('auth_session', { path: '/' });
-    return reply.redirect('/login');
+    return reply.redirect(`${config.FRONTEND_URL}/login`);
   });
 
   /**
