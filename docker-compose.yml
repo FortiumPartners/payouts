@@ -62,7 +62,7 @@ services:
       - "3007:3000"
     environment:
       - NODE_ENV=development
-      - VITE_API_URL=http://localhost:8005
+      - VITE_API_URL=http://api:8000
     volumes:
       - ./frontend:/app:delegated
       - /app/node_modules
