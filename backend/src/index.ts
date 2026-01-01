@@ -10,6 +10,8 @@ import {
 } from 'fastify-type-provider-zod';
 import { config } from './lib/config.js';
 import { healthRoutes } from './routes/health.js';
+import { authRoutes } from './routes/auth.js';
+import { billsRoutes } from './routes/bills.js';
 
 const fastify = Fastify({
   logger: {
@@ -55,12 +57,8 @@ async function main() {
 
   // Routes
   await fastify.register(healthRoutes);
-
-  // API v1 routes will be registered here
-  // await fastify.register(authRoutes, { prefix: '/auth' });
-  // await fastify.register(billsRoutes, { prefix: '/api/bills' });
-  // await fastify.register(paymentsRoutes, { prefix: '/api/payments' });
-  // await fastify.register(tenantsRoutes, { prefix: '/api/tenants' });
+  await fastify.register(authRoutes, { prefix: '/auth' });
+  await fastify.register(billsRoutes, { prefix: '/api/bills' });
 
   // Start server
   try {
