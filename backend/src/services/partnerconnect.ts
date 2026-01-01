@@ -38,16 +38,21 @@ export class PCAPIError extends PCError {
 export interface PCBill {
   uid: string;
   description: string;
-  status: string;
-  amount: number;
-  clientUid: string;
-  clientName: string;
-  engagementUid: string;
-  invoiceUid: string;
-  payeeVendorId: string;
-  payeeName: string;
-  createdAt: Date;
-  approvedAt?: Date;
+  statusCode: string;  // 'Ready' or ProcessCode value
+  processCode: string;
+  total: number;
+  balance: number;
+  adjustedBillPayment: number;  // Amount to actually pay
+  resourceUid: string;
+  resourceName: string;
+  externalBillId: string;
+  externalBillDocNum: string;
+  externalInvoiceId: string;
+  externalInvoiceDocNum: string;
+  trxDate: Date;
+  dueDate?: Date;
+  paidDate?: Date;
+  tenantCode: string;
 }
 
 /**
@@ -192,13 +197,24 @@ export class PartnerConnectClient {
   }
 
   /**
-   * Fetch bills with status "approved but not paid".
-   * This is the main method for the payouts workflow.
+   * Fetch payable bills - ready for payment processing.
+   * Uses /api/bills/payables which returns bills where:
+   * - Invoice is fully paid (Balance = 0)
+   * - Invoice is not voided
+   * - Bill has balance to pay (Balance > 0)
+   * - Not yet approved (ProcessCode empty)
    */
-  async getApprovedBills(): Promise<PCBill[]> {
-    // TODO: Adjust endpoint based on actual PC API
-    const data = await this.request<any[]>('GET', '/api/bills?status=approved');
+  async getPayableBills(): Promise<PCBill[]> {
+    const data = await this.request<any[]>('GET', '/api/bills/payables');
+    return data.map(bill => this.mapBill(bill));
+  }
 
+  /**
+   * Approve bills for payment.
+   * @param uids - List of bill UIDs to approve
+   */
+  async approveBills(uids: string[]): Promise<PCBill[]> {
+    const data = await this.request<any[]>('POST', '/api/bills/approve', uids);
     return data.map(bill => this.mapBill(bill));
   }
 
@@ -215,21 +231,27 @@ export class PartnerConnectClient {
    * Handles PascalCase field names from .NET API.
    */
   private mapBill(data: Record<string, unknown>): PCBill {
+    // Handle Resource which may be an object with Uid/Name
+    const resource = data.Resource as Record<string, unknown> | undefined;
+
     return {
-      uid: String(data.Uid || data.uid || ''),
-      description: String(data.Description || data.description || ''),
-      status: String(data.Status || data.status || ''),
-      amount: Number(data.Amount || data.amount || 0),
-      clientUid: String(data.ClientUid || data.clientUid || ''),
-      clientName: String(data.ClientName || data.clientName || ''),
-      engagementUid: String(data.EngagementUid || data.engagementUid || ''),
-      invoiceUid: String(data.InvoiceUid || data.invoiceUid || ''),
-      payeeVendorId: String(data.PayeeVendorId || data.payeeVendorId || ''),
-      payeeName: String(data.PayeeName || data.payeeName || ''),
-      createdAt: new Date(String(data.CreateTime || data.createdAt)),
-      approvedAt: data.ApprovedAt || data.approvedAt
-        ? new Date(String(data.ApprovedAt || data.approvedAt))
-        : undefined,
+      uid: String(data.Uid || ''),
+      description: String(data.Description || ''),
+      statusCode: String(data.StatusCode || 'Ready'),
+      processCode: String(data.ProcessCode || ''),
+      total: Number(data.Total || 0),
+      balance: Number(data.Balance || 0),
+      adjustedBillPayment: Number(data.AdjustedBillPayment || data.Balance || 0),
+      resourceUid: String(resource?.Uid || data.ResourceUid || ''),
+      resourceName: String(resource?.Name || data.ResourceName || ''),
+      externalBillId: String(data.ExternalBillId || ''),
+      externalBillDocNum: String(data.ExternalBillDocNum || ''),
+      externalInvoiceId: String(data.ExternalInvoiceId || ''),
+      externalInvoiceDocNum: String(data.ExternalInvoiceDocNum || ''),
+      trxDate: new Date(String(data.TrxDate)),
+      dueDate: data.DueDate ? new Date(String(data.DueDate)) : undefined,
+      paidDate: data.PaidDate ? new Date(String(data.PaidDate)) : undefined,
+      tenantCode: String(data.TenantCode || ''),
     };
   }
 

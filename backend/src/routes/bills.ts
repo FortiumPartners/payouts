@@ -77,19 +77,19 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      // Fetch approved bills from PartnerConnect
-      const rawBills = await pcClient.getApprovedBills();
+      // Fetch payable bills from PartnerConnect
+      const rawBills = await pcClient.getPayableBills();
 
       // Get tenants for proving period config
       const tenants = await prisma.tenant.findMany();
-      const tenantMap = new Map(tenants.map(t => [t.pcTenantId, t]));
+      const tenantMap = new Map(tenants.map(t => [t.name, t]));
 
       // Run control checks on each bill
       const billsWithControls: BillWithControls[] = await Promise.all(
         rawBills.map(async (bill) => {
-          // Determine tenant (for now assume US if not found)
-          const tenantConfig = tenantMap.get(bill.clientUid);
-          const tenantType: 'US' | 'CA' = tenantConfig?.name === 'Canada' ? 'CA' : 'US';
+          // Determine tenant from tenantCode (e.g., 'US' or 'CA')
+          const tenantConfig = tenantMap.get(bill.tenantCode === 'CA' ? 'Canada' : 'US');
+          const tenantType: 'US' | 'CA' = bill.tenantCode === 'CA' ? 'CA' : 'US';
           const provingPeriod = tenantConfig?.provingPeriodHours || 24;
 
           const controlResults = await runControlChecks(bill, tenantType, provingPeriod);
@@ -97,10 +97,10 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
           return {
             uid: bill.uid,
             description: bill.description,
-            status: bill.status,
-            amount: bill.amount,
-            clientName: bill.clientName,
-            payeeName: bill.payeeName,
+            status: bill.statusCode,
+            amount: bill.adjustedBillPayment,
+            clientName: bill.resourceName,  // Resource is the payee/partner
+            payeeName: bill.resourceName,
             controls: controlResults.controls.map(c => ({
               name: c.name,
               passed: c.passed,
@@ -171,11 +171,10 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
       const bill = await pcClient.getBill(id);
 
       // Get tenant config
+      const tenantType: 'US' | 'CA' = bill.tenantCode === 'CA' ? 'CA' : 'US';
       const tenant = await prisma.tenant.findFirst({
-        where: { pcTenantId: bill.clientUid },
+        where: { name: tenantType === 'CA' ? 'Canada' : 'US' },
       });
-
-      const tenantType: 'US' | 'CA' = tenant?.name === 'Canada' ? 'CA' : 'US';
       const provingPeriod = tenant?.provingPeriodHours || 24;
 
       const controlResults = await runControlChecks(bill, tenantType, provingPeriod);
@@ -183,10 +182,10 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
       return {
         uid: bill.uid,
         description: bill.description,
-        status: bill.status,
-        amount: bill.amount,
-        clientName: bill.clientName,
-        payeeName: bill.payeeName,
+        status: bill.statusCode,
+        amount: bill.adjustedBillPayment,
+        clientName: bill.resourceName,
+        payeeName: bill.resourceName,
         controls: controlResults.controls.map(c => ({
           name: c.name,
           passed: c.passed,
