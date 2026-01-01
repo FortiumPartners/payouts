@@ -60,10 +60,24 @@ See `.env.example` for required variables. Never commit `.env`.
 
 ## Port Allocation
 
-| Service   | Internal | External |
-|-----------|----------|----------|
-| API       | 8000     | TBD      |
-| Frontend  | 3000     | TBD      |
+| Service   | Internal | External (Dev) |
+|-----------|----------|----------------|
+| Database  | 5432     | 5436           |
+| API       | 8000     | 8005           |
+| Frontend  | 3000     | 3007           |
+
+## Deployment (Render.com)
+
+Blueprint config in `render.yaml`. To deploy:
+1. Connect repo to Render dashboard
+2. Create new Blueprint from `render.yaml`
+3. Set environment variables in dashboard (secrets marked `sync: false`)
+
+**Required env vars for production:**
+- `DATABASE_URL` - Supabase pooled connection string
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` - OAuth credentials
+- `BASE_URL` - Full URL of deployed API
+- `VITE_API_URL` - API URL for frontend
 
 ## Related Projects
 
