@@ -1,0 +1,72 @@
+// Fortium Payouts - Database Schema
+// Using Supabase PostgreSQL
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Tenant represents a PartnerConnect tenant with 1:1 QBO company mapping
+model Tenant {
+  id                 String   @id @default(cuid())
+  name               String   // "US" or "Canada"
+  pcTenantId         String   @unique // PartnerConnect tenant ID
+  qboCompanyId       String   // QuickBooks company ID
+  paymentProcessor   String   // "bill_com" or "wise"
+  provingPeriodHours Int      @default(24)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  payments PaymentRecord[]
+
+  @@map("tenants")
+}
+
+// AdminUser for Google OAuth allowlist
+model AdminUser {
+  id          String    @id @default(cuid())
+  email       String    @unique
+  createdAt   DateTime  @default(now())
+  lastLoginAt DateTime?
+
+  @@map("admin_users")
+}
+
+// PaymentRecord tracks payment attempts and history
+model PaymentRecord {
+  id             String    @id @default(cuid())
+  tenantId       String
+  tenant         Tenant    @relation(fields: [tenantId], references: [id])
+  pcBillId       String    // PartnerConnect bill ID
+  qboInvoiceId   String    // QuickBooks invoice ID
+  payeeVendorId  String    // Bill.com or Wise vendor ID
+  payeeName      String    // Vendor/payee name for display
+  amount         Decimal   @db.Decimal(12, 2)
+  status         String    // pending_controls, ready, processing, paid, failed
+  controlResults Json      // { invoicePaid: true, invoiceNotVoided: true, ... }
+  failureReason  String?   // Reason if status is 'failed'
+  paidAt         DateTime?
+  paymentRef     String?   // External payment reference from Bill.com/Wise
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([tenantId])
+  @@index([status])
+  @@index([pcBillId])
+  @@map("payment_records")
+}
+
+// ControlConfig stores adjustable control settings
+model ControlConfig {
+  id        String   @id @default(cuid())
+  key       String   @unique // e.g., "proving_period_hours", "auto_pay_enabled"
+  value     String   // JSON-encoded value
+  updatedAt DateTime @updatedAt
+
+  @@map("control_configs")
+}
