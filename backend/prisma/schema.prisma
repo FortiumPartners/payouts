@@ -70,3 +70,16 @@ model ControlConfig {
 
   @@map("control_configs")
 }
+
+// WiseRecipient maps PC payee names to Wise account emails
+model WiseRecipient {
+  id             String   @id @default(cuid())
+  payeeName      String   @unique // PartnerConnect resourceName
+  wiseEmail      String            // Wise account email
+  targetCurrency String   @default("USD") // CAD or USD
+  wiseContactId  String?           // Cached contact ID from Wise API
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("wise_recipients")
+}

@@ -18,6 +18,10 @@ const billWithControlsSchema = z.object({
   amount: z.number(),
   clientName: z.string(),
   payeeName: z.string(),
+  tenantCode: z.enum(['US', 'CA']),
+  qboInvoiceNum: z.string().nullable(),
+  qboBillNum: z.string().nullable(),
+  billComId: z.string().nullable(),
   controls: z.array(z.object({
     name: z.string(),
     passed: z.boolean(),
@@ -42,6 +46,10 @@ export interface BillWithControls {
   amount: number;
   clientName: string;
   payeeName: string;
+  tenantCode: 'US' | 'CA';
+  qboInvoiceNum: string | null;
+  qboBillNum: string | null;
+  billComId: string | null;
   controls: { name: string; passed: boolean; reason?: string }[];
   readyToPay: boolean;
 }
@@ -87,9 +95,10 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
       // Run control checks on each bill
       const billsWithControls: BillWithControls[] = await Promise.all(
         rawBills.map(async (bill) => {
-          // Determine tenant from tenantCode (e.g., 'US' or 'CA')
-          const tenantConfig = tenantMap.get(bill.tenantCode === 'CA' ? 'Canada' : 'US');
-          const tenantType: 'US' | 'CA' = bill.tenantCode === 'CA' ? 'CA' : 'US';
+          // Determine tenant from tenantCode - normalize various formats
+          const isCanada = ['CA', 'CAN', 'Canada'].includes(bill.tenantCode);
+          const tenantConfig = tenantMap.get(isCanada ? 'Canada' : 'US');
+          const tenantType: 'US' | 'CA' = isCanada ? 'CA' : 'US';
           const provingPeriod = tenantConfig?.provingPeriodHours || 24;
 
           const controlResults = await runControlChecks(bill, tenantType, provingPeriod);
@@ -99,8 +108,12 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
             description: bill.description,
             status: bill.statusCode,
             amount: bill.adjustedBillPayment,
-            clientName: bill.resourceName,  // Resource is the payee/partner
-            payeeName: bill.resourceName,
+            clientName: bill.clientName,     // Client (who we invoice)
+            payeeName: bill.resourceName,    // Payee (who we pay)
+            tenantCode: tenantType,
+            qboInvoiceNum: bill.externalInvoiceDocNum || null,
+            qboBillNum: bill.externalBillDocNum || null,
+            billComId: tenantType === 'US' ? (bill.externalBillId || null) : null,
             controls: controlResults.controls.map(c => ({
               name: c.name,
               passed: c.passed,
@@ -114,7 +127,7 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
       // Filter by tenant if specified
       let filteredBills = billsWithControls;
       if (tenant !== 'all') {
-        // TODO: Filter by tenant once we have that mapping
+        filteredBills = filteredBills.filter(b => b.tenantCode === tenant);
       }
 
       // Filter by status if specified
@@ -170,10 +183,11 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       const bill = await pcClient.getBill(id);
 
-      // Get tenant config
-      const tenantType: 'US' | 'CA' = bill.tenantCode === 'CA' ? 'CA' : 'US';
+      // Get tenant config - normalize various formats
+      const isCanada = ['CA', 'CAN', 'Canada'].includes(bill.tenantCode);
+      const tenantType: 'US' | 'CA' = isCanada ? 'CA' : 'US';
       const tenant = await prisma.tenant.findFirst({
-        where: { name: tenantType === 'CA' ? 'Canada' : 'US' },
+        where: { name: isCanada ? 'Canada' : 'US' },
       });
       const provingPeriod = tenant?.provingPeriodHours || 24;
 
@@ -184,8 +198,12 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
         description: bill.description,
         status: bill.statusCode,
         amount: bill.adjustedBillPayment,
-        clientName: bill.resourceName,
-        payeeName: bill.resourceName,
+        clientName: bill.clientName,     // Client (who we invoice)
+        payeeName: bill.resourceName,    // Payee (who we pay)
+        tenantCode: tenantType,
+        qboInvoiceNum: bill.externalInvoiceDocNum || null,
+        qboBillNum: bill.externalBillDocNum || null,
+        billComId: tenantType === 'US' ? (bill.externalBillId || null) : null,
         controls: controlResults.controls.map(c => ({
           name: c.name,
           passed: c.passed,

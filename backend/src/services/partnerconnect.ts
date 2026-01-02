@@ -44,7 +44,8 @@ export interface PCBill {
   balance: number;
   adjustedBillPayment: number;  // Amount to actually pay
   resourceUid: string;
-  resourceName: string;
+  resourceName: string;         // Payee - who we pay
+  clientName: string;           // Client - who we invoice
   externalBillId: string;
   externalBillDocNum: string;
   externalInvoiceId: string;
@@ -197,16 +198,21 @@ export class PartnerConnectClient {
   }
 
   /**
-   * Fetch payable bills - ready for payment processing.
-   * Uses /api/bills/payables which returns bills where:
-   * - Invoice is fully paid (Balance = 0)
-   * - Invoice is not voided
-   * - Bill has balance to pay (Balance > 0)
-   * - Not yet approved (ProcessCode empty)
+   * Fetch approved bills ready for payment.
+   * Uses /api/bills/explorers and filters for:
+   * - ProcessCode = 'Approved' (bill has been approved)
+   * - Balance > 0 (bill not yet paid)
    */
   async getPayableBills(): Promise<PCBill[]> {
-    const data = await this.request<any[]>('GET', '/api/bills/payables');
-    return data.map(bill => this.mapBill(bill));
+    const data = await this.request<any[]>('GET', '/api/bills/explorers');
+
+    // Filter for approved bills with positive balance
+    const approved = data.filter(bill =>
+      bill.ProcessCode === 'Approved' &&
+      (bill.Balance || 0) > 0
+    );
+
+    return approved.map(bill => this.mapBill(bill));
   }
 
   /**
@@ -229,21 +235,23 @@ export class PartnerConnectClient {
   /**
    * Map API response to PCBill type.
    * Handles PascalCase field names from .NET API.
+   * Works with both Bill and BillExplorer response shapes.
    */
   private mapBill(data: Record<string, unknown>): PCBill {
-    // Handle Resource which may be an object with Uid/Name
+    // Handle Resource which may be an object with Uid/Name (Bill) or flat fields (BillExplorer)
     const resource = data.Resource as Record<string, unknown> | undefined;
 
     return {
       uid: String(data.Uid || ''),
       description: String(data.Description || ''),
-      statusCode: String(data.StatusCode || 'Ready'),
+      statusCode: String(data.StatusCode || data.ProcessCode || 'Ready'),
       processCode: String(data.ProcessCode || ''),
       total: Number(data.Total || 0),
       balance: Number(data.Balance || 0),
       adjustedBillPayment: Number(data.AdjustedBillPayment || data.Balance || 0),
       resourceUid: String(resource?.Uid || data.ResourceUid || ''),
-      resourceName: String(resource?.Name || data.ResourceName || ''),
+      resourceName: String(resource?.Name || data.Payee || data.ResourceName || ''),
+      clientName: String(data.ClientName || data.EngagementDescription || ''),
       externalBillId: String(data.ExternalBillId || ''),
       externalBillDocNum: String(data.ExternalBillDocNum || ''),
       externalInvoiceId: String(data.ExternalInvoiceId || ''),

@@ -1,16 +1,27 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
-import { DollarSign, RefreshCw, LogOut, Loader2 } from 'lucide-react';
+import { Routes, Route, Navigate, Link } from 'react-router-dom';
+import { DollarSign, RefreshCw, LogOut, Loader2, AlertCircle, CheckCircle, Settings } from 'lucide-react';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { useBills } from './hooks/useBills';
-import { BillsList } from './components/BillsList';
-import { Bill } from './lib/api';
+import { BillsList, ViewModeToggle, ViewMode } from './components/BillsList';
+import { PaymentConfirmationModal } from './components/PaymentConfirmationModal';
+import { WiseRecipientsPage } from './components/WiseRecipientsPage';
+import { Bill, api } from './lib/api';
 import { useState } from 'react';
 
 function Dashboard() {
   const { user, logout } = useAuth();
   const [statusFilter, setStatusFilter] = useState<'all' | 'ready' | 'pending'>('all');
-  const { bills, summary, loading, error, refresh } = useBills({ status: statusFilter });
+  const [tenantFilter, setTenantFilter] = useState<'all' | 'US' | 'CA'>('all');
+  const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const { bills, summary, loading, error, refresh } = useBills({ status: statusFilter, tenant: tenantFilter });
   const [refreshing, setRefreshing] = useState(false);
+  const [paymentStatus, setPaymentStatus] = useState<{
+    loading: boolean;
+    success: boolean | null;
+    message: string | null;
+    billId: string | null;
+  }>({ loading: false, success: null, message: null, billId: null });
+  const [pendingPaymentBill, setPendingPaymentBill] = useState<Bill | null>(null);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -19,9 +30,54 @@ function Dashboard() {
   };
 
   const handlePayBill = (bill: Bill) => {
-    // TODO: Implement payment flow
-    console.log('Pay bill:', bill.uid);
-    alert(`Payment flow for ${bill.payeeName} - $${bill.amount.toFixed(2)} not yet implemented`);
+    // Open confirmation modal instead of browser confirm
+    setPendingPaymentBill(bill);
+  };
+
+  const handleConfirmPayment = async () => {
+    const bill = pendingPaymentBill;
+    if (!bill) return;
+
+    setPendingPaymentBill(null);
+    setPaymentStatus({ loading: true, success: null, message: null, billId: bill.uid });
+
+    try {
+      const result = await api.payBill(bill.uid);
+
+      if (result.success) {
+        setPaymentStatus({
+          loading: false,
+          success: true,
+          message: result.message,
+          billId: bill.uid,
+        });
+        // Refresh bills list after successful payment
+        await refresh();
+      } else {
+        setPaymentStatus({
+          loading: false,
+          success: false,
+          message: result.message,
+          billId: bill.uid,
+        });
+      }
+    } catch (err) {
+      setPaymentStatus({
+        loading: false,
+        success: false,
+        message: err instanceof Error ? err.message : 'Payment failed',
+        billId: bill.uid,
+      });
+    }
+
+    // Clear status after 5 seconds
+    setTimeout(() => {
+      setPaymentStatus({ loading: false, success: null, message: null, billId: null });
+    }, 5000);
+  };
+
+  const handleCancelPayment = () => {
+    setPendingPaymentBill(null);
   };
 
   const formatAmount = (amount: number) =>
@@ -47,6 +103,14 @@ function Dashboard() {
             {user && (
               <span className="text-sm text-muted-foreground">{user.email}</span>
             )}
+            <Link
+              to="/wise-recipients"
+              className="flex items-center gap-2 px-4 py-2 rounded-md border hover:bg-muted"
+              title="Manage Wise Recipients"
+            >
+              <Settings className="h-4 w-4" />
+              Recipients
+            </Link>
             <button
               onClick={handleRefresh}
               disabled={refreshing}
@@ -68,6 +132,31 @@ function Dashboard() {
 
       {/* Main content */}
       <main className="container mx-auto px-4 py-8">
+        {/* Payment status notification */}
+        {paymentStatus.message && (
+          <div
+            className={`mb-4 p-4 rounded-lg flex items-center gap-3 ${
+              paymentStatus.success
+                ? 'bg-green-50 border border-green-200 text-green-800'
+                : 'bg-red-50 border border-red-200 text-red-800'
+            }`}
+          >
+            {paymentStatus.success ? (
+              <CheckCircle className="h-5 w-5" />
+            ) : (
+              <AlertCircle className="h-5 w-5" />
+            )}
+            <span>{paymentStatus.message}</span>
+          </div>
+        )}
+
+        {paymentStatus.loading && (
+          <div className="mb-4 p-4 rounded-lg flex items-center gap-3 bg-blue-50 border border-blue-200 text-blue-800">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            <span>Processing payment...</span>
+          </div>
+        )}
+
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
           <div className="rounded-lg border bg-card p-6">
@@ -88,20 +177,47 @@ function Dashboard() {
         </div>
 
         {/* Filter tabs */}
-        <div className="flex gap-2 mb-4">
-          {(['all', 'ready', 'pending'] as const).map((status) => (
-            <button
-              key={status}
-              onClick={() => setStatusFilter(status)}
-              className={`px-4 py-2 rounded-md text-sm font-medium ${
-                statusFilter === status
-                  ? 'bg-primary text-primary-foreground'
-                  : 'bg-muted hover:bg-muted/80'
-              }`}
-            >
-              {status === 'all' ? 'All Bills' : status === 'ready' ? 'Ready to Pay' : 'Pending'}
-            </button>
-          ))}
+        <div className="flex flex-wrap gap-4 mb-4">
+          {/* Status filter */}
+          <div className="flex gap-2">
+            <span className="self-center text-sm text-muted-foreground mr-1">Status:</span>
+            {(['all', 'ready', 'pending'] as const).map((status) => (
+              <button
+                key={status}
+                onClick={() => setStatusFilter(status)}
+                className={`px-4 py-2 rounded-md text-sm font-medium ${
+                  statusFilter === status
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted hover:bg-muted/80'
+                }`}
+              >
+                {status === 'all' ? 'All' : status === 'ready' ? 'Ready' : 'Pending'}
+              </button>
+            ))}
+          </div>
+
+          {/* Tenant filter */}
+          <div className="flex gap-2">
+            <span className="self-center text-sm text-muted-foreground mr-1">Tenant:</span>
+            {(['all', 'US', 'CA'] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTenantFilter(t)}
+                className={`px-4 py-2 rounded-md text-sm font-medium ${
+                  tenantFilter === t
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted hover:bg-muted/80'
+                }`}
+              >
+                {t === 'all' ? 'All' : t}
+              </button>
+            ))}
+          </div>
+
+          {/* View mode toggle */}
+          <div className="ml-auto">
+            <ViewModeToggle viewMode={viewMode} onChange={setViewMode} />
+          </div>
         </div>
 
         {/* Bills table */}
@@ -113,10 +229,18 @@ function Dashboard() {
             bills={bills}
             loading={loading}
             error={error}
+            viewMode={viewMode}
             onPayBill={handlePayBill}
           />
         </div>
       </main>
+
+      {/* Payment confirmation modal */}
+      <PaymentConfirmationModal
+        bill={pendingPaymentBill}
+        onConfirm={handleConfirmPayment}
+        onCancel={handleCancelPayment}
+      />
     </div>
   );
 }
@@ -190,6 +314,14 @@ function App() {
           element={
             <ProtectedRoute>
               <Dashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/wise-recipients"
+          element={
+            <ProtectedRoute>
+              <WiseRecipientsPage />
             </ProtectedRoute>
           }
         />

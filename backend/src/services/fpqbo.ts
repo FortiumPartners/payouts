@@ -1,6 +1,6 @@
 /**
  * fpqbo API client for QuickBooks invoice and bill data.
- * Uses API key authentication.
+ * Uses API key authentication against qbo-oauth service.
  */
 
 import { config } from '../lib/config.js';
@@ -36,6 +36,12 @@ export interface QBOBill {
   dueDate: Date;
 }
 
+// Internal company IDs in qbo-oauth database
+const COMPANY_IDS: Record<string, string> = {
+  US: '1',
+  CA: '2',
+};
+
 /**
  * fpqbo API client for QuickBooks data access.
  */
@@ -43,6 +49,7 @@ export class FpqboClient {
   private apiUrl: string;
   private apiKey: string;
   private tenant: 'US' | 'CA';
+  private companyId: string;
 
   constructor(tenant: 'US' | 'CA' = 'US', options?: {
     apiUrl?: string;
@@ -53,6 +60,7 @@ export class FpqboClient {
     this.apiKey = options?.apiKey || (tenant === 'US'
       ? config.FPQBO_API_KEY_US || ''
       : config.FPQBO_API_KEY_CA || '');
+    this.companyId = COMPANY_IDS[tenant];
   }
 
   /**
@@ -68,6 +76,7 @@ export class FpqboClient {
     }
 
     const url = `${this.apiUrl}${endpoint}`;
+    console.log(`[fpqbo] ${method} ${url}`);
 
     try {
       const response = await fetch(url, {
@@ -79,8 +88,11 @@ export class FpqboClient {
         body: body ? JSON.stringify(body) : undefined,
       });
 
+      console.log(`[fpqbo] Response status: ${response.status}`);
+
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({})) as { message?: string; error?: string };
+        console.log(`[fpqbo] Error response:`, errorData);
         throw new FpqboError(
           errorData.message || errorData.error || `API error ${response.status}`,
           response.status
@@ -90,28 +102,31 @@ export class FpqboClient {
       return await response.json() as T;
     } catch (err) {
       if (err instanceof FpqboError) throw err;
+      console.log(`[fpqbo] Request error:`, err);
       throw new FpqboError(`Request failed: ${err}`);
     }
   }
 
   /**
-   * Get invoice by ID.
+   * Get invoice by DocNumber (e.g., "10044").
+   * Uses the /by-doc-number endpoint which is what PartnerConnect stores.
    */
-  async getInvoice(invoiceId: string): Promise<QBOInvoice> {
-    const data = await this.request<any>('GET', `/api/invoices/${invoiceId}`);
+  async getInvoiceByDocNumber(docNumber: string): Promise<QBOInvoice> {
+    const data = await this.request<any>('GET', `/api/invoices/by-doc-number/${docNumber}?company_id=${this.companyId}`);
     return this.mapInvoice(data);
   }
 
   /**
    * Check if an invoice has been paid.
+   * @param docNumber - The invoice DocNumber (e.g., "10044") from PartnerConnect's externalInvoiceDocNum
    */
-  async isInvoicePaid(invoiceId: string): Promise<{
+  async isInvoicePaid(docNumber: string): Promise<{
     paid: boolean;
     paidDate?: Date;
     voided: boolean;
     voidedDate?: Date;
   }> {
-    const invoice = await this.getInvoice(invoiceId);
+    const invoice = await this.getInvoiceByDocNumber(docNumber);
     return {
       paid: invoice.status === 'Paid',
       paidDate: invoice.paidDate,
@@ -124,7 +139,7 @@ export class FpqboClient {
    * Get bill by ID.
    */
   async getBill(billId: string): Promise<QBOBill> {
-    const data = await this.request<any>('GET', `/api/bills/${billId}`);
+    const data = await this.request<any>('GET', `/api/bills/${billId}?company_id=${this.companyId}`);
     return this.mapBill(data);
   }
 
@@ -138,23 +153,32 @@ export class FpqboClient {
 
   /**
    * Map API response to QBOInvoice.
+   * Infers status from Balance: 0 = Paid, >0 = Open
    */
   private mapInvoice(data: Record<string, unknown>): QBOInvoice {
-    const status = String(data.status || data.Status || 'Open');
+    const balance = Number(data.balance || data.Balance || 0);
+    const customerRef = data.CustomerRef as Record<string, unknown> | undefined;
+
+    // Determine status from balance
+    let status: QBOInvoice['status'] = 'Open';
+    if (balance === 0) {
+      status = 'Paid';
+    }
+
     return {
       id: String(data.id || data.Id || ''),
       docNumber: String(data.docNumber || data.DocNumber || ''),
       totalAmount: Number(data.totalAmount || data.TotalAmt || 0),
-      balance: Number(data.balance || data.Balance || 0),
-      status: status as QBOInvoice['status'],
+      balance,
+      status,
       paidDate: data.paidDate || data.PaidDate
         ? new Date(String(data.paidDate || data.PaidDate))
         : undefined,
       voidedDate: data.voidedDate || data.VoidedDate
         ? new Date(String(data.voidedDate || data.VoidedDate))
         : undefined,
-      customerId: String(data.customerId || data.CustomerRef?.value || ''),
-      customerName: String(data.customerName || data.CustomerRef?.name || ''),
+      customerId: String(data.customerId || customerRef?.value || ''),
+      customerName: String(data.customerName || customerRef?.name || ''),
     };
   }
 
@@ -162,13 +186,14 @@ export class FpqboClient {
    * Map API response to QBOBill.
    */
   private mapBill(data: Record<string, unknown>): QBOBill {
+    const vendorRef = data.VendorRef as Record<string, unknown> | undefined;
     return {
       id: String(data.id || data.Id || ''),
       docNumber: String(data.docNumber || data.DocNumber || ''),
       totalAmount: Number(data.totalAmount || data.TotalAmt || 0),
       balance: Number(data.balance || data.Balance || 0),
-      vendorId: String(data.vendorId || (data.VendorRef as any)?.value || ''),
-      vendorName: String(data.vendorName || (data.VendorRef as any)?.name || ''),
+      vendorId: String(data.vendorId || vendorRef?.value || ''),
+      vendorName: String(data.vendorName || vendorRef?.name || ''),
       dueDate: new Date(String(data.dueDate || data.DueDate)),
     };
   }

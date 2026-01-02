@@ -25,9 +25,17 @@ const envSchema = z.object({
   PARTNERCONNECT_AUTH0_DOMAIN: z.string().optional(),
   PARTNERCONNECT_AUDIENCE: z.string().optional(),
   BILLCOM_API_URL: z.string().optional(),
-  BILLCOM_API_KEY: z.string().optional(),
-  WISE_API_URL: z.string().optional(),
-  WISE_API_KEY: z.string().optional(),
+  BILLCOM_USERNAME: z.string().optional(),
+  BILLCOM_PASSWORD: z.string().optional(),
+  BILLCOM_DEV_KEY: z.string().optional(),
+  BILLCOM_ORG_ID: z.string().optional(),
+  BILLCOM_MFA_ID: z.string().optional(),
+  BILLCOM_DEVICE_ID: z.string().default('fortium-payouts'),
+
+  // Wise
+  WISE_API_URL: z.string().default('https://api.wise.com'),
+  WISE_API_TOKEN: z.string().optional(),
+  WISE_SANDBOX: z.string().default('false'), // 'true' for sandbox
 });
 
 export type Env = z.infer<typeof envSchema>;
