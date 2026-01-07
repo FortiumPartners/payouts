@@ -36,6 +36,12 @@ const envSchema = z.object({
   WISE_API_URL: z.string().default('https://api.wise.com'),
   WISE_API_TOKEN: z.string().optional(),
   WISE_SANDBOX: z.string().default('false'), // 'true' for sandbox
+
+  // Email (Postmark)
+  POSTMARK_API_TOKEN: z.string().optional(),
+  POSTMARK_FROM_EMAIL: z.string().default('accounting@fortiumpartners.com'),
+  POSTMARK_FROM_NAME: z.string().default('Fortium Partners'),
+  FORTIUM_FINANCE_EMAIL: z.string().default('accounting@fortiumpartners.com'),
 });
 
 export type Env = z.infer<typeof envSchema>;

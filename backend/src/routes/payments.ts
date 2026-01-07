@@ -9,6 +9,7 @@ import { getBillComClient, BillComMfaRequired } from '../services/billcom.js';
 import { getWiseClient } from '../services/wise.js';
 import { getPartnerConnectClient } from '../services/partnerconnect.js';
 import { runControlChecks } from '../services/controls.js';
+import { getEmailService } from '../services/email.js';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth } from './auth.js';
 
@@ -226,9 +227,9 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
           });
         }
 
-        // Get recipient mapping
+        // Get recipient mapping by QBO vendor ID
         const recipient = await prisma.wiseRecipient.findUnique({
-          where: { payeeName: bill.resourceName },
+          where: { qboVendorId: bill.qboVendorId },
         });
 
         if (!recipient) {
@@ -237,42 +238,128 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
             billId,
             amount: bill.adjustedBillPayment,
             status: 'no_recipient',
-            message: `No Wise recipient mapping for "${bill.resourceName}"`,
+            message: `No Wise recipient mapping for vendor "${bill.resourceName}" (QBO ID: ${bill.qboVendorId})`,
           });
         }
-
-        // Find contact in Wise (or use cached ID)
-        let contactId = recipient.wiseContactId ? parseInt(recipient.wiseContactId, 10) : null;
-
-        if (!contactId) {
-          const contact = await wise.findContact(recipient.wiseEmail, recipient.targetCurrency);
-          if (!contact) {
-            return reply.status(404).send({
-              success: false,
-              billId,
-              amount: bill.adjustedBillPayment,
-              status: 'contact_not_found',
-              message: `Wise contact not found for email: ${recipient.wiseEmail}`,
-            });
-          }
-          contactId = contact.id;
-
-          // Cache the contact ID
-          await prisma.wiseRecipient.update({
-            where: { id: recipient.id },
-            data: { wiseContactId: String(contactId) },
-          });
-        }
-
-        // Create quote (CAD -> target currency)
-        const quote = await wise.createQuote('CAD', recipient.targetCurrency, bill.adjustedBillPayment);
 
         // Create reference: invoice number + last name
         const lastName = bill.resourceName.split(' ').pop() || 'Payment';
         const reference = `${bill.externalInvoiceDocNum || bill.uid}-${lastName}`.substring(0, 10);
 
-        // Create transfer
-        const transfer = await wise.createTransfer(quote.id, contactId, reference);
+        // Determine payment flow based on recipient type
+        const isWiseToWise = recipient.wiseContactId && recipient.wiseContactId.includes('-');
+        let transfer;
+        let quote;
+
+        if (isWiseToWise) {
+          // ---------------------------------------------------------------
+          // WISE-TO-WISE TRANSFER (using email recipient)
+          // ---------------------------------------------------------------
+          // For Wise-to-Wise contacts, we create an email-type recipient.
+          // When the recipient has a Wise account linked to that email,
+          // funds go directly to their Wise balance.
+
+          // Check if we have a valid email (not placeholder text)
+          const hasValidEmail = recipient.wiseEmail &&
+            !recipient.wiseEmail.toLowerCase().includes('wise account') &&
+            !recipient.wiseEmail.toLowerCase().includes('wise business');
+
+          if (!hasValidEmail) {
+            return reply.status(400).send({
+              success: false,
+              billId,
+              amount: bill.adjustedBillPayment,
+              status: 'missing_email',
+              message: `Wise-to-Wise recipient "${bill.resourceName}" needs an email address configured. Update their Wise recipient record with their email.`,
+            });
+          }
+
+          // Check if we already have a cached recipient account ID
+          let emailRecipientId = recipient.wiseRecipientAccountId;
+
+          if (emailRecipientId) {
+            fastify.log.info({
+              cachedAccountId: emailRecipientId,
+              payeeName: bill.resourceName,
+            }, 'Using cached Wise recipient account ID');
+          } else {
+            // Create email recipient and cache the ID for future use
+            fastify.log.info({
+              contactUuid: recipient.wiseContactId,
+              email: recipient.wiseEmail,
+              payeeName: bill.resourceName,
+            }, 'Creating new Wise email recipient');
+
+            emailRecipientId = await wise.createEmailRecipient(
+              bill.resourceName,
+              recipient.wiseEmail!,
+              recipient.targetCurrency
+            );
+
+            // Cache the recipient ID for future payments
+            await prisma.wiseRecipient.update({
+              where: { qboVendorId: bill.qboVendorId },
+              data: { wiseRecipientAccountId: emailRecipientId },
+            });
+
+            fastify.log.info({
+              emailRecipientId,
+              payeeName: bill.resourceName,
+            }, 'Cached Wise recipient account ID');
+          }
+
+          // Create quote (CAD -> target currency)
+          quote = await wise.createQuote(
+            'CAD',
+            recipient.targetCurrency,
+            bill.adjustedBillPayment
+          );
+
+          // Create transfer with the email recipient's numeric ID
+          transfer = await wise.createTransfer(quote.id, emailRecipientId, reference);
+        } else {
+          // ---------------------------------------------------------------
+          // BANK ACCOUNT TRANSFER (using v1/accounts numeric ID)
+          // ---------------------------------------------------------------
+          let recipientAccountId: number | null = null;
+
+          // Check if wiseContactId is a numeric account ID (from v1/accounts)
+          if (recipient.wiseContactId && !recipient.wiseContactId.includes('-')) {
+            recipientAccountId = parseInt(recipient.wiseContactId, 10);
+            fastify.log.info({ recipientAccountId }, 'Using stored v1/accounts ID');
+          }
+          // Try email-based lookup
+          else if (recipient.wiseEmail && !recipient.wiseEmail.toLowerCase().includes('wise account')) {
+            const contact = await wise.findContact(recipient.wiseEmail, recipient.targetCurrency);
+            if (contact) {
+              recipientAccountId = contact.id;
+            }
+          }
+          // Fall back to name-based matching
+          if (!recipientAccountId) {
+            const accountByName = await wise.findAccountByName(bill.resourceName, recipient.targetCurrency);
+            if (accountByName) {
+              recipientAccountId = accountByName.id;
+              fastify.log.info({ recipientAccountId, type: accountByName.type }, 'Found account by name');
+            }
+          }
+
+          if (!recipientAccountId) {
+            return reply.status(400).send({
+              success: false,
+              billId,
+              amount: bill.adjustedBillPayment,
+              status: 'invalid_recipient',
+              message: `No valid payment method for "${bill.resourceName}". Please configure their Wise contact ID or bank details.`,
+            });
+          }
+
+          // Create quote (CAD -> target currency)
+          quote = await wise.createQuote('CAD', recipient.targetCurrency, bill.adjustedBillPayment);
+
+          // Create transfer with numeric account ID
+          transfer = await wise.createTransfer(quote.id, recipientAccountId, reference);
+        }
 
         // Fund the transfer from Wise balance
         const fundResult = await wise.fundTransfer(transfer.id);
@@ -286,13 +373,82 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
           rate: quote.rate,
         }, 'Wise payment initiated');
 
+        // Send payment confirmation email (Wise payments only)
+        const emailService = getEmailService();
+        let emailResult: { success: boolean; messageId?: string; errorMessage?: string } = {
+          success: false,
+          messageId: undefined,
+          errorMessage: 'Not attempted'
+        };
+        const payeeEmail = bill.payeeEmail;
+
+        if (payeeEmail && emailService.isConfigured()) {
+          emailResult = await emailService.sendPaymentConfirmation({
+            to: payeeEmail,
+            payeeName: bill.resourceName,
+            amountCAD: bill.adjustedBillPayment,
+            targetAmount: quote.targetAmount,
+            targetCurrency: recipient.targetCurrency,
+            exchangeRate: quote.rate,
+            invoiceReference: bill.externalInvoiceDocNum || bill.uid,
+            expectedDelivery: quote.paymentOptions?.[0]?.estimatedDelivery || new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
+            transferId: transfer.id,
+          });
+
+          if (!emailResult.success) {
+            fastify.log.warn({
+              billId,
+              payeeEmail,
+              error: emailResult.errorMessage,
+            }, 'Payment email failed - payment still succeeded');
+          } else {
+            fastify.log.info({
+              billId,
+              payeeEmail,
+              messageId: emailResult.messageId,
+            }, 'Payment confirmation email sent');
+          }
+        } else {
+          if (!payeeEmail) {
+            fastify.log.info({ billId, payeeName: bill.resourceName }, 'No payee email available, skipping notification');
+            emailResult.errorMessage = 'No payee email available';
+          } else if (!emailService.isConfigured()) {
+            fastify.log.info({ billId }, 'Email service not configured, skipping notification');
+            emailResult.errorMessage = 'Email service not configured';
+          }
+        }
+
+        // Create payment record to prevent duplicate payments
+        await prisma.paymentRecord.create({
+          data: {
+            tenantId: tenant!.id,
+            pcBillId: billId,
+            qboInvoiceId: bill.externalInvoiceDocNum || '',
+            payeeVendorId: recipient.wiseContactId || recipient.wiseEmail || 'unknown',
+            payeeName: bill.resourceName,
+            amount: bill.adjustedBillPayment,
+            status: 'paid',
+            paidAt: new Date(),
+            paymentRef: String(transfer.id),
+            controlResults: JSON.parse(JSON.stringify(controlResults)),
+            // Email tracking fields
+            payeeEmail: payeeEmail || null,
+            emailSentAt: emailResult.success ? new Date() : null,
+            emailMessageId: emailResult.messageId || null,
+            emailStatus: emailResult.success ? 'sent' : (payeeEmail ? 'failed' : 'skipped'),
+            emailError: emailResult.success ? null : emailResult.errorMessage,
+          },
+        });
+
+        fastify.log.info({ billId, transferId: transfer.id }, 'PaymentRecord created');
+
         return {
           success: true,
           paymentId: String(transfer.id),
           billId,
           amount: bill.adjustedBillPayment,
           status: fundResult.status || transfer.status,
-          message: `Wise transfer initiated: ${quote.targetAmount.toFixed(2)} ${recipient.targetCurrency} (rate: ${quote.rate.toFixed(4)})`,
+          message: `Wise transfer initiated: ${(quote.targetAmount ?? bill.adjustedBillPayment).toFixed(2)} ${recipient.targetCurrency} (rate: ${(quote.rate ?? 1).toFixed(4)})`,
         };
       }
 
@@ -300,8 +456,8 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
       // BILL.COM PAYMENT FLOW (US)
       // =====================================================================
 
-      // Find the bill in Bill.com by invoice number
-      const billcomBill = await billcom.findBill(bill.externalInvoiceDocNum)
+      // Find the bill in Bill.com by bill doc number (QBO bill number)
+      const billcomBill = await billcom.findBill(bill.externalBillDocNum)
 
       if (!billcomBill) {
         return reply.status(404).send({
@@ -309,13 +465,14 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
           billId,
           amount: bill.adjustedBillPayment,
           status: 'not_found',
-          message: `Bill not found in Bill.com: ${bill.externalInvoiceDocNum}`,
+          message: `Bill not found in Bill.com: ${bill.externalBillDocNum}`,
         });
       }
 
       // Execute payment
       const payment = await billcom.payBill(
         billcomBill.id,
+        billcomBill.vendorId,
         bill.adjustedBillPayment,
         processDate
       );
@@ -324,7 +481,25 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
         billId,
         paymentId: payment.id,
         amount: bill.adjustedBillPayment,
-      }, 'Payment initiated');
+      }, 'Bill.com payment initiated');
+
+      // Create payment record to prevent duplicate payments
+      await prisma.paymentRecord.create({
+        data: {
+          tenantId: tenant!.id,
+          pcBillId: billId,
+          qboInvoiceId: bill.externalInvoiceDocNum || '',
+          payeeVendorId: billcomBill.vendorId,
+          payeeName: bill.resourceName,
+          amount: bill.adjustedBillPayment,
+          status: 'paid',
+          paidAt: new Date(),
+          paymentRef: payment.id,
+          controlResults: JSON.parse(JSON.stringify(controlResults)),
+        },
+      });
+
+      fastify.log.info({ billId, paymentId: payment.id }, 'PaymentRecord created');
 
       return {
         success: true,

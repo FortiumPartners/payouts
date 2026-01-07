@@ -55,6 +55,13 @@ model PaymentRecord {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
+  // Email tracking (Phase 1: Wise payment confirmations)
+  payeeEmail     String?   // Email address used for notification
+  emailSentAt    DateTime? // Timestamp of successful send
+  emailMessageId String?   // Postmark message ID
+  emailStatus    String?   // 'sent', 'delivered', 'failed', 'bounced', 'skipped'
+  emailError     String?   // Error message if failed
+
   @@index([tenantId])
   @@index([status])
   @@index([pcBillId])
@@ -71,15 +78,29 @@ model ControlConfig {
   @@map("control_configs")
 }
 
-// WiseRecipient maps PC payee names to Wise account emails
+// WiseRecipient maps QBO vendor to Wise account (CA payments)
 model WiseRecipient {
-  id             String   @id @default(cuid())
-  payeeName      String   @unique // PartnerConnect resourceName
-  wiseEmail      String            // Wise account email
-  targetCurrency String   @default("USD") // CAD or USD
-  wiseContactId  String?           // Cached contact ID from Wise API
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                     String   @id @default(cuid())
+  qboVendorId            String   @unique // QBO vendor ID (from PC Resource.CAExternalUserId)
+  payeeName              String            // Display name (for reference only)
+  wiseEmail              String            // Wise account email (required for Wise-to-Wise transfers)
+  targetCurrency         String   @default("CAD") // Target currency for payments
+  wiseContactId          String?           // Contact UUID from Wise address book (for Wise-to-Wise)
+  wiseRecipientAccountId Int?              // Cached v1/accounts ID (created from email recipient)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 
   @@map("wise_recipients")
+}
+
+// BillComVendor maps QBO vendor to Bill.com vendor (US payments)
+model BillComVendor {
+  id              String   @id @default(cuid())
+  qboVendorId     String   @unique // QBO vendor ID (from PC Resource.USExternalUserId)
+  payeeName       String            // Display name (for reference only)
+  billComVendorId String            // Bill.com vendor ID
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("billcom_vendors")
 }

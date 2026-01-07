@@ -12,7 +12,9 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@fastify/cookie": "^9.3.1",
@@ -25,12 +27,15 @@
     "fastify-type-provider-zod": "^1.1.9",
     "pino": "^8.19.0",
     "pino-pretty": "^10.3.1",
+    "postmark": "^4.0.5",
     "zod": "^3.22.4"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
+    "dotenv": "^17.2.3",
     "prisma": "^5.10.0",
     "tsx": "^4.7.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^3.2.4"
   }
 }

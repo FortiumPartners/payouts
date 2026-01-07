@@ -44,7 +44,8 @@ export interface PCBill {
   balance: number;
   adjustedBillPayment: number;  // Amount to actually pay
   resourceUid: string;
-  resourceName: string;         // Payee - who we pay
+  resourceName: string;         // Payee - who we pay (display only)
+  qboVendorId: string;          // QBO vendor ID (Resource.CAExternalUserId or USExternalUserId)
   clientName: string;           // Client - who we invoice
   externalBillId: string;
   externalBillDocNum: string;
@@ -54,6 +55,7 @@ export interface PCBill {
   dueDate?: Date;
   paidDate?: Date;
   tenantCode: string;
+  payeeEmail?: string;          // Payee's email address from Resource.PrimaryEmail (single bill only)
 }
 
 /**
@@ -238,8 +240,28 @@ export class PartnerConnectClient {
    * Works with both Bill and BillExplorer response shapes.
    */
   private mapBill(data: Record<string, unknown>): PCBill {
-    // Handle Resource which may be an object with Uid/Name (Bill) or flat fields (BillExplorer)
+    // Handle Resource which may be an object with Uid/FullName (individual Bill)
+    // or flat fields like Payee (BillExplorer list)
     const resource = data.Resource as Record<string, unknown> | undefined;
+    const tenantCode = String(data.TenantCode || '');
+
+    // Resource object uses FullName, not Name
+    const resourceName = String(
+      resource?.FullName ||
+      resource?.DisplayName ||
+      resource?.Name ||
+      data.Payee ||
+      data.ResourceName ||
+      ''
+    );
+
+    // QBO vendor ID comes from Resource.CAExternalUserId (CA) or USExternalUserId (US)
+    const isCanada = ['CA', 'CAN', 'Canada'].includes(tenantCode);
+    const qboVendorId = String(
+      isCanada
+        ? (resource?.CAExternalUserId || data.CAExternalUserId || '')
+        : (resource?.USExternalUserId || data.USExternalUserId || '')
+    );
 
     return {
       uid: String(data.Uid || ''),
@@ -250,8 +272,16 @@ export class PartnerConnectClient {
       balance: Number(data.Balance || 0),
       adjustedBillPayment: Number(data.AdjustedBillPayment || data.Balance || 0),
       resourceUid: String(resource?.Uid || data.ResourceUid || ''),
-      resourceName: String(resource?.Name || data.Payee || data.ResourceName || ''),
-      clientName: String(data.ClientName || data.EngagementDescription || ''),
+      resourceName,
+      qboVendorId,
+      clientName: String(
+        data.ClientName ||
+        data.Client ||
+        data.EngagementDescription ||
+        // Extract from description if available (format: "...for [ClientName]")
+        this.extractClientFromDescription(String(data.Description || '')) ||
+        ''
+      ),
       externalBillId: String(data.ExternalBillId || ''),
       externalBillDocNum: String(data.ExternalBillDocNum || ''),
       externalInvoiceId: String(data.ExternalInvoiceId || ''),
@@ -259,8 +289,20 @@ export class PartnerConnectClient {
       trxDate: new Date(String(data.TrxDate)),
       dueDate: data.DueDate ? new Date(String(data.DueDate)) : undefined,
       paidDate: data.PaidDate ? new Date(String(data.PaidDate)) : undefined,
-      tenantCode: String(data.TenantCode || ''),
+      tenantCode,
+      // Payee email from Resource.PrimaryEmail (only available in single bill response, not list)
+      payeeEmail: resource?.PrimaryEmail ? String(resource.PrimaryEmail) : undefined,
     };
+  }
+
+  /**
+   * Extract client name from description.
+   * Format: "...for [ClientName]" at the end of description.
+   */
+  private extractClientFromDescription(description: string): string {
+    // Match "for [ClientName]" at the end, where ClientName doesn't contain " for "
+    const match = description.match(/ for ([^]+)$/);
+    return match?.[1]?.trim() || '';
   }
 
   /**
@@ -268,6 +310,14 @@ export class PartnerConnectClient {
    */
   isConfigured(): boolean {
     return !!(this.apiUrl && this.clientId && this.clientSecret && this.auth0Domain);
+  }
+
+  /**
+   * Get access token (for health checks).
+   * This tests the OAuth flow.
+   */
+  async getAccessToken(): Promise<string> {
+    return this.getToken();
   }
 }
 
