@@ -7,6 +7,7 @@ export interface PaymentEmailData {
   payeeName: string;
   amountDisplay: string;
   invoiceReference: string;
+  description?: string;  // e.g., "for services rendered..."
   expectedDelivery: string;
   transferId: string;
   financeEmail: string;
@@ -27,7 +28,7 @@ export function renderPaymentConfirmationHtml(data: PaymentEmailData): string {
   <div style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
     <!-- Header -->
     <div style="background-color: #0066cc; padding: 30px; text-align: center;">
-      <img src="https://www.fortiumpartners.com/hubfs/raw_assets/public/FortiumPartners_2022/images/5f43cb31a09dd4e4d62b0a20_logo.svg" alt="Fortium Partners" style="height: 40px; margin-bottom: 15px;">
+      <img src="https://www.fortiumpartners.com/hubfs/social-suggested-images/www.fortiumpartners.comhs-fshubfsFP%20registered%20logo.png" alt="Fortium Partners" style="height: 40px; margin-bottom: 15px;">
       <h1 style="color: #ffffff; margin: 0; font-size: 24px;">Payment Confirmation</h1>
     </div>
 
@@ -48,7 +49,11 @@ export function renderPaymentConfirmationHtml(data: PaymentEmailData): string {
           <tr>
             <td style="padding: 10px 0; color: #666; border-bottom: 1px solid #e5e5e5;">Invoice Reference:</td>
             <td style="padding: 10px 0; text-align: right; border-bottom: 1px solid #e5e5e5;">${escapeHtml(data.invoiceReference)}</td>
-          </tr>
+          </tr>${data.description ? `
+          <tr>
+            <td style="padding: 10px 0; color: #666; border-bottom: 1px solid #e5e5e5;">Description:</td>
+            <td style="padding: 10px 0; text-align: right; border-bottom: 1px solid #e5e5e5;">${escapeHtml(data.description)}</td>
+          </tr>` : ''}
           <tr>
             <td style="padding: 10px 0; color: #666; border-bottom: 1px solid #e5e5e5;">Expected Delivery:</td>
             <td style="padding: 10px 0; text-align: right; border-bottom: 1px solid #e5e5e5;">${escapeHtml(data.expectedDelivery)}</td>
@@ -94,7 +99,8 @@ Great news! Your payment has been initiated and is being processed through Wise.
 PAYMENT DETAILS
 ---------------
 Amount: ${data.amountDisplay}
-Invoice Reference: ${data.invoiceReference}
+Invoice Reference: ${data.invoiceReference}${data.description ? `
+Description: ${data.description}` : ''}
 Expected Delivery: ${data.expectedDelivery}
 Reference ID: ${data.transferId}
 

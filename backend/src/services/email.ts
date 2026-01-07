@@ -15,6 +15,7 @@ export interface SendPaymentEmailParams {
   targetCurrency: string;
   exchangeRate?: number;
   invoiceReference: string;
+  description?: string;  // Bill description, e.g., "for services rendered..."
   expectedDelivery: string;
   transferId: number;
 }
@@ -159,6 +160,7 @@ export class EmailService {
       payeeName: params.payeeName,
       amountDisplay,
       invoiceReference: params.invoiceReference,
+      description: params.description,
       expectedDelivery: deliveryEstimate,
       transferId: String(params.transferId),
       financeEmail: this.financeEmail,
@@ -168,6 +170,7 @@ export class EmailService {
       payeeName: params.payeeName,
       amountDisplay,
       invoiceReference: params.invoiceReference,
+      description: params.description,
       expectedDelivery: deliveryEstimate,
       transferId: String(params.transferId),
       financeEmail: this.financeEmail,

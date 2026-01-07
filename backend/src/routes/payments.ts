@@ -391,6 +391,7 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
             targetCurrency: recipient.targetCurrency,
             exchangeRate: quote.rate,
             invoiceReference: bill.externalInvoiceDocNum || bill.uid,
+            description: bill.description,
             expectedDelivery: quote.paymentOptions?.[0]?.estimatedDelivery || new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
             transferId: transfer.id,
           });
