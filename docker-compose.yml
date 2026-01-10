@@ -14,7 +14,7 @@ services:
       - PORT=8000
       - HOST=0.0.0.0
       - LOG_LEVEL=debug
-      - DATABASE_URL=postgresql://payouts:payouts@host.docker.internal:5432/payouts
+      - DATABASE_URL=postgresql://fortium_render_production_postgres_user:qUoIQ7rLsDBEDEu7kZwfKHyuIXIXyCXC@dpg-d5dcfmqli9vc73dfrfvg-a.oregon-postgres.render.com/payouts
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-placeholder}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-placeholder}
       - SESSION_SECRET=${SESSION_SECRET:-dev-session-secret}

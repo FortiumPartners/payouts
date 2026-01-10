@@ -204,6 +204,20 @@ export class FpqboClient {
   isConfigured(): boolean {
     return !!(this.apiUrl && this.apiKey);
   }
+
+  /**
+   * Health check - verify API connectivity.
+   */
+  async healthCheck(): Promise<void> {
+    // Try to fetch a known invoice to verify connectivity
+    // This will throw if there's an auth or connectivity issue
+    const response = await fetch(`${this.apiUrl}/health`, {
+      headers: { 'X-API-Key': this.apiKey },
+    });
+    if (!response.ok) {
+      throw new FpqboError(`Health check failed: ${response.status}`);
+    }
+  }
 }
 
 // Factory for getting tenant-specific clients

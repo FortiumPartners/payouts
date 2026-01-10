@@ -88,41 +88,42 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
       // Fetch payable bills from PartnerConnect
       const rawBills = await pcClient.getPayableBills();
 
+      // Get already-paid bills to filter them out
+      const paidRecords = await prisma.paymentRecord.findMany({
+        where: { status: 'paid' },
+        select: { pcBillId: true },
+      });
+      const paidBillIds = new Set(paidRecords.map(p => p.pcBillId));
+
+      // Filter out bills that have already been paid
+      const unpaidBills = rawBills.filter(b => !paidBillIds.has(b.uid));
+      fastify.log.info({ total: rawBills.length, paid: paidBillIds.size, unpaid: unpaidBills.length }, 'Bills filtered');
+
       // Get tenants for proving period config
       const tenants = await prisma.tenant.findMany();
       const tenantMap = new Map(tenants.map(t => [t.name, t]));
 
-      // Run control checks on each bill
-      const billsWithControls: BillWithControls[] = await Promise.all(
-        rawBills.map(async (bill) => {
-          // Determine tenant from tenantCode - normalize various formats
-          const isCanada = ['CA', 'CAN', 'Canada'].includes(bill.tenantCode);
-          const tenantConfig = tenantMap.get(isCanada ? 'Canada' : 'US');
-          const tenantType: 'US' | 'CA' = isCanada ? 'CA' : 'US';
-          const provingPeriod = tenantConfig?.provingPeriodHours || 24;
+      // Return bills immediately without control checks (they're slow)
+      // Controls are checked on-demand via GET /api/bills/:id
+      const billsWithControls: BillWithControls[] = unpaidBills.map((bill) => {
+        const isCanada = ['CA', 'CAN', 'Canada'].includes(bill.tenantCode);
+        const tenantType: 'US' | 'CA' = isCanada ? 'CA' : 'US';
 
-          const controlResults = await runControlChecks(bill, tenantType, provingPeriod);
-
-          return {
-            uid: bill.uid,
-            description: bill.description,
-            status: bill.statusCode,
-            amount: bill.adjustedBillPayment,
-            clientName: bill.clientName,     // Client (who we invoice)
-            payeeName: bill.resourceName,    // Payee (who we pay)
-            tenantCode: tenantType,
-            qboInvoiceNum: bill.externalInvoiceDocNum || null,
-            qboBillNum: bill.externalBillDocNum || null,
-            billComId: tenantType === 'US' ? (bill.externalBillId || null) : null,
-            controls: controlResults.controls.map(c => ({
-              name: c.name,
-              passed: c.passed,
-              reason: c.reason,
-            })),
-            readyToPay: controlResults.readyToPay,
-          };
-        })
-      );
+        return {
+          uid: bill.uid,
+          description: bill.description,
+          status: bill.statusCode,
+          amount: bill.adjustedBillPayment,
+          clientName: bill.clientName,
+          payeeName: bill.resourceName,
+          tenantCode: tenantType,
+          qboInvoiceNum: bill.externalInvoiceDocNum || null,
+          qboBillNum: bill.externalBillDocNum || null,
+          billComId: tenantType === 'US' ? (bill.externalBillId || null) : null,
+          controls: [], // Controls loaded on-demand
+          readyToPay: false, // Unknown until controls checked
+        };
+      });
 
       // Filter by tenant if specified
       let filteredBills = billsWithControls;
@@ -153,6 +154,81 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
         statusCode: 500,
       });
     }
+  });
+
+  /**
+   * POST /api/bills/check-controls - Batch check controls for multiple bills
+   * Runs control checks in parallel for efficiency
+   */
+  fastify.post('/check-controls', {
+    schema: {
+      body: z.object({
+        billIds: z.array(z.string()).max(50), // Limit to prevent overload
+      }),
+      response: {
+        200: z.object({
+          results: z.record(z.string(), z.object({
+            controls: z.array(z.object({
+              name: z.string(),
+              passed: z.boolean(),
+              reason: z.string().optional(),
+            })),
+            readyToPay: z.boolean(),
+          })),
+        }),
+      },
+    },
+  }, async (request, reply) => {
+    const { billIds } = request.body as { billIds: string[] };
+
+    const pcClient = getPartnerConnectClient();
+
+    if (!pcClient.isConfigured()) {
+      return reply.status(503).send({
+        error: 'PartnerConnect not configured',
+        message: 'API credentials not set',
+        statusCode: 503,
+      });
+    }
+
+    // Get tenant configs
+    const tenants = await prisma.tenant.findMany();
+    const getTenant = (code: string) => {
+      const isCanada = ['CA', 'CAN', 'Canada'].includes(code);
+      return tenants.find(t => t.name === (isCanada ? 'Canada' : 'US'));
+    };
+
+    // Fetch and check controls in parallel
+    const results: Record<string, { controls: { name: string; passed: boolean; reason?: string }[]; readyToPay: boolean }> = {};
+
+    await Promise.all(billIds.map(async (billId) => {
+      try {
+        const bill = await pcClient.getBill(billId);
+        const isCanada = ['CA', 'CAN', 'Canada'].includes(bill.tenantCode);
+        const tenantType: 'US' | 'CA' = isCanada ? 'CA' : 'US';
+        const tenant = getTenant(bill.tenantCode);
+        const provingPeriod = tenant?.provingPeriodHours || 24;
+
+        const controlResults = await runControlChecks(bill, tenantType, provingPeriod);
+
+        results[billId] = {
+          controls: controlResults.controls.map(c => ({
+            name: c.name,
+            passed: c.passed,
+            reason: c.reason,
+          })),
+          readyToPay: controlResults.readyToPay,
+        };
+      } catch (err) {
+        fastify.log.error(err, `Failed to check controls for bill ${billId}`);
+        results[billId] = {
+          controls: [{ name: 'error', passed: false, reason: String(err) }],
+          readyToPay: false,
+        };
+      }
+    }));
+
+    return { results };
   });
 
   /**

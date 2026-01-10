@@ -16,6 +16,7 @@ interface UseBillsResult {
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
+  updateBill: (updatedBill: Bill) => void;
 }
 
 export function useBills(options: UseBillsOptions = {}): UseBillsResult {
@@ -43,11 +44,29 @@ export function useBills(options: UseBillsOptions = {}): UseBillsResult {
     fetchBills();
   }, [fetchBills]);
 
+  // Update a single bill in state and recalculate summary
+  const updateBill = useCallback((updatedBill: Bill) => {
+    setBills(currentBills => {
+      const newBills = currentBills.map(b =>
+        b.uid === updatedBill.uid ? updatedBill : b
+      );
+      // Recalculate summary
+      const readyToPay = newBills.filter(b => b.readyToPay).length;
+      setSummary(prev => prev ? {
+        ...prev,
+        readyToPay,
+        pending: newBills.length - readyToPay,
+      } : null);
+      return newBills;
+    });
+  }, []);
+
   return {
     bills,
     summary,
     loading,
     error,
     refresh: fetchBills,
+    updateBill,
   };
 }

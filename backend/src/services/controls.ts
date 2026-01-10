@@ -212,39 +212,13 @@ export async function runControlChecks(
 
   if (tenant === 'US') {
     console.log(`[controls] Running Bill.com checks for US bill ${bill.uid}`);
-    // Control: Vendor Exists in Bill.com
-    try {
-      console.log(`[controls] Bill.com isConfigured: ${billcom?.isConfigured()}`);
-      if (!billcom?.isConfigured()) {
-        controls.push({
-          name: 'vendorExistsInBillCom',
-          passed: false,
-          reason: 'Bill.com not configured',
-          checkedAt: new Date(),
-        });
-      } else {
-        const vendor = await billcom.findVendor(bill.resourceName);
-        controls.push({
-          name: 'vendorExistsInBillCom',
-          passed: !!vendor,
-          reason: vendor
-            ? `Vendor: ${vendor.name} (${vendor.id})`
-            : `Vendor "${bill.resourceName}" not found in Bill.com`,
-          checkedAt: new Date(),
-        });
-      }
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      controls.push({
-        name: 'vendorExistsInBillCom',
-        passed: false,
-        reason: `Unable to verify vendor: ${errMsg}`,
-        checkedAt: new Date(),
-      });
-    }
+
+    // Note: For Bill.com, we don't need a local vendor mapping.
+    // The bill already exists in Bill.com with vendor attached.
+    // We verify the bill exists, vendor exists, and bill is approved.
 
     // Control: Bill Exists in Bill.com
-    let billComBill: { id: string; approvalStatus: string; amount: number } | null = null;
+    let billComBill: { id: string; vendorId: string; approvalStatus: string; amount: number } | null = null;
 
     try {
       if (!billcom?.isConfigured()) {
@@ -282,6 +256,36 @@ export async function runControlChecks(
       });
     }
 
+    // Control: Vendor Exists in Bill.com (using vendor ID from the bill)
+    if (billComBill && billcom?.isConfigured()) {
+      try {
+        const vendor = await billcom.getVendor(billComBill.vendorId);
+        controls.push({
+          name: 'vendorExistsInBillCom',
+          passed: !!vendor,
+          reason: vendor
+            ? `Vendor: ${vendor.name} (${vendor.id})`
+            : `Bill.com vendor ${billComBill.vendorId} not found`,
+          checkedAt: new Date(),
+        });
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        controls.push({
+          name: 'vendorExistsInBillCom',
+          passed: false,
+          reason: `Unable to verify vendor: ${errMsg}`,
+          checkedAt: new Date(),
+        });
+      }
+    } else if (!billComBill) {
+      controls.push({
+        name: 'vendorExistsInBillCom',
+        passed: false,
+        reason: 'Cannot verify (bill not found in Bill.com)',
+        checkedAt: new Date(),
+      });
+    }
+
     // Control: Bill Approved in Bill.com
     if (billComBill) {
       // Bill.com approval statuses: '0' = Unassigned, '1' = Assigned, '2' = Approving, '3' = Approved, '4' = Denied
@@ -311,21 +315,32 @@ export async function runControlChecks(
     const wise = getWiseClient();
 
     // Control: Recipient Mapped in System
-    // Check if we have a WiseRecipient record for this payee
-    let wiseRecipient: { id: string; wiseEmail: string; targetCurrency: string; wiseContactId: string | null } | null = null;
+    // Check if we have a WiseRecipient record for this vendor (by QBO vendor ID)
+    let wiseRecipient: { id: string; payeeName: string; wiseEmail: string; targetCurrency: string; wiseContactId: string | null } | null = null;
     try {
-      wiseRecipient = await prisma.wiseRecipient.findUnique({
-        where: { payeeName: bill.resourceName },
-      });
+      if (!bill.qboVendorId) {
+        controls.push({
+          name: 'recipientMappedInSystem',
+          passed: false,
+          reason: `No QBO vendor ID on bill for ${bill.resourceName}`,
+          checkedAt: new Date(),
+        });
+      } else {
+        console.log(`[controls] Looking up Wise recipient for QBO vendor ID: "${bill.qboVendorId}" (${bill.resourceName})`);
+        wiseRecipient = await prisma.wiseRecipient.findUnique({
+          where: { qboVendorId: bill.qboVendorId },
+        });
+        console.log(`[controls] Wise recipient lookup result:`, wiseRecipient ? `Found: ${wiseRecipient.wiseEmail}` : 'Not found');
 
-      controls.push({
-        name: 'recipientMappedInSystem',
-        passed: !!wiseRecipient,
-        reason: wiseRecipient
-          ? `Mapped to: ${wiseRecipient.wiseEmail} (${wiseRecipient.targetCurrency})`
-          : `No Wise mapping for "${bill.resourceName}" - add to wise_recipients table`,
-        checkedAt: new Date(),
-      });
+        controls.push({
+          name: 'recipientMappedInSystem',
+          passed: !!wiseRecipient,
+          reason: wiseRecipient
+            ? `Mapped to: ${wiseRecipient.wiseEmail} (${wiseRecipient.targetCurrency})`
+            : `No Wise mapping for QBO vendor ${bill.qboVendorId} (${bill.resourceName})`,
+          checkedAt: new Date(),
+        });
+      }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       controls.push({
@@ -337,7 +352,7 @@ export async function runControlChecks(
     }
 
     // Control: Recipient Exists in Wise
-    // Verify the contact exists in Wise by email lookup
+    // Verify the contact exists in Wise - by cached ID or email lookup
     try {
       if (!wise.isConfigured()) {
         controls.push({
@@ -354,21 +369,60 @@ export async function runControlChecks(
           checkedAt: new Date(),
         });
       } else {
-        const contact = await wise.findContact(wiseRecipient.wiseEmail, wiseRecipient.targetCurrency);
-        controls.push({
-          name: 'recipientExistsInWise',
-          passed: !!contact,
-          reason: contact
-            ? `Wise contact: ${contact.accountHolderName} (${contact.id})`
-            : `No Wise contact found for ${wiseRecipient.wiseEmail}`,
-          checkedAt: new Date(),
-        });
+        let contactFound = false;
+        let contactName = '';
+        let contactIdentifier = '';
+        let controlAlreadyAdded = false;
 
-        // Cache the contact ID if found and not already cached
-        if (contact && !wiseRecipient.wiseContactId) {
-          await prisma.wiseRecipient.update({
-            where: { id: wiseRecipient.id },
-            data: { wiseContactId: String(contact.id) },
+        // If we have a contact UUID, verify it exists AND we have a valid email
+        if (wiseRecipient.wiseContactId && wiseRecipient.wiseContactId.includes('-')) {
+          // UUID format - this is a Wise-to-Wise contact
+          // We need a valid email to create an email-type recipient for transfers
+          const hasValidEmail = wiseRecipient.wiseEmail &&
+            !wiseRecipient.wiseEmail.toLowerCase().includes('wise account') &&
+            !wiseRecipient.wiseEmail.toLowerCase().includes('wise business');
+
+          if (!hasValidEmail) {
+            // Missing email - fail the control with helpful message
+            controls.push({
+              name: 'recipientExistsInWise',
+              passed: false,
+              reason: `Wise-to-Wise contact needs email configured (currently: "${wiseRecipient.wiseEmail || 'none'}")`,
+              checkedAt: new Date(),
+            });
+            controlAlreadyAdded = true;
+          } else {
+            // Has valid email - verify contact exists in Wise
+            const recipients = await wise.listRecipients();
+            const matchedRecipient = recipients.find(r => r.contactUuid === wiseRecipient.wiseContactId);
+            if (matchedRecipient) {
+              contactFound = true;
+              contactName = matchedRecipient.name?.fullName || '';
+              contactIdentifier = `${wiseRecipient.wiseEmail}`;
+            }
+          }
+        }
+
+        // Fall back to email lookup for bank account recipients (numeric IDs)
+        if (!contactFound && !controlAlreadyAdded && wiseRecipient.wiseEmail && !wiseRecipient.wiseEmail.toLowerCase().includes('wise account')) {
+          const foundContact = await wise.findContact(wiseRecipient.wiseEmail, wiseRecipient.targetCurrency);
+          if (foundContact) {
+            contactFound = true;
+            contactName = foundContact.accountHolderName;
+            contactIdentifier = String(foundContact.id);
+          }
+        }
+
+        if (!controlAlreadyAdded) {
+          controls.push({
+            name: 'recipientExistsInWise',
+            passed: contactFound,
+            reason: contactFound
+              ? `Wise contact: ${contactName} (${contactIdentifier})`
+              : wiseRecipient.wiseContactId
+                ? `No payable account for contact ${wiseRecipient.wiseContactId.substring(0, 8)}...`
+                : `No Wise contact found for ${wiseRecipient.wiseEmail}`,
+            checkedAt: new Date(),
           });
         }
       }
@@ -384,6 +438,7 @@ export async function runControlChecks(
 
     // Control: Wise Payment Ready
     // Verify Wise is configured and ready for payments
+    // Note: Balance check happens at payment time in the confirmation dialog
     controls.push({
       name: 'wisePaymentReady',
       passed: wise.isConfigured() && !!wiseRecipient,
@@ -397,6 +452,20 @@ export async function runControlChecks(
   // =========================================================================
   // GENERAL CONTROLS
   // =========================================================================
+
+  // Control: Not Already Paid
+  // Check if this bill was already paid through Payouts
+  const existingPayment = await prisma.paymentRecord.findFirst({
+    where: { pcBillId: bill.uid, status: 'paid' },
+  });
+  controls.push({
+    name: 'notAlreadyPaid',
+    passed: !existingPayment,
+    reason: existingPayment
+      ? `Already paid on ${existingPayment.paidAt?.toISOString().split('T')[0]} (ref: ${existingPayment.paymentRef})`
+      : 'Not yet paid',
+    checkedAt: new Date(),
+  });
 
   // Control: Proving Period
   // Configurable wait period before payment can be initiated

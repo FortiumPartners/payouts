@@ -12,8 +12,9 @@ import { getWiseClient } from '../services/wise.js';
 // Schemas
 const wiseRecipientSchema = z.object({
   id: z.string(),
+  qboVendorId: z.string(),
   payeeName: z.string(),
-  wiseEmail: z.string(),
+  wiseEmail: z.string(),  // May be empty for Wise-to-Wise contacts
   targetCurrency: z.string(),
   wiseContactId: z.string().nullable(),
   createdAt: z.string(),
@@ -21,11 +22,17 @@ const wiseRecipientSchema = z.object({
 });
 
 const createRecipientSchema = z.object({
+  qboVendorId: z.string().min(1, 'QBO Vendor ID is required'),
   payeeName: z.string().min(1, 'Payee name is required'),
-  wiseEmail: z.string().email('Valid email is required'),
-  targetCurrency: z.enum(['USD', 'CAD']).default('USD'),
-  wiseContactId: z.number().optional(),
-});
+  // For Wise-to-Wise contacts, email may be empty (use contactId instead)
+  wiseEmail: z.string().default(''),
+  targetCurrency: z.enum(['USD', 'CAD']).default('CAD'),
+  // Contact UUID from Wise API (for Wise-to-Wise contacts)
+  wiseContactId: z.string().optional(),
+}).refine(
+  (data) => data.wiseEmail || data.wiseContactId,
+  { message: 'Either Wise email or contact ID is required' }
+);
 
 const updateRecipientSchema = z.object({
   wiseEmail: z.string().email('Valid email is required').optional(),
@@ -90,13 +97,15 @@ export const wiseRecipientsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       const balances = await wise.getBalances();
 
-      return {
-        balances: balances.map(b => ({
-          currency: b.currency,
-          amount: b.amount.value,
-          reserved: b.reservedAmount.value,
-        })),
-      };
+      const mapped = balances.map(b => ({
+        currency: b.currency,
+        amount: b.amount.value,
+        reserved: b.reservedAmount.value,
+      }));
+
+      console.log(`[Wise balance] Returning:`, JSON.stringify(mapped));
+
+      return { balances: mapped };
     } catch (err) {
       request.log.error(err, 'Failed to fetch Wise balances');
       return reply.status(500).send({
@@ -152,6 +161,8 @@ export const wiseRecipientsRoutes: FastifyPluginAsync = async (fastify) => {
           country: r.country,
           type: r.type,
           accountSummary: r.accountSummary,
+          // Include UUID for Wise-to-Wise transfers
+          contactUuid: r.contactUuid || null,
         })),
       };
     } catch (err) {
@@ -175,11 +186,12 @@ export const wiseRecipientsRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
   }, async (request, reply) => {
-    const { payeeName, wiseEmail, targetCurrency, wiseContactId } = request.body as z.infer<typeof createRecipientSchema>;
+    const { qboVendorId, payeeName, wiseEmail, targetCurrency, wiseContactId } = request.body as z.infer<typeof createRecipientSchema>;
 
     try {
       const recipient = await prisma.wiseRecipient.create({
         data: {
+          qboVendorId,
           payeeName,
           wiseEmail,
           targetCurrency,

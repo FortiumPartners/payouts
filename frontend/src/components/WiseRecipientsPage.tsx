@@ -9,10 +9,12 @@ import { Link } from 'react-router-dom';
 import { api, WiseRecipient, WiseAccount } from '../lib/api';
 
 interface RecipientFormData {
+  qboVendorId: string;
   payeeName: string;
   wiseEmail: string;
   targetCurrency: 'USD' | 'CAD';
-  wiseContactId?: number;
+  // Contact UUID from Wise API (stored as wiseContactId in DB)
+  wiseContactId?: string;
 }
 
 function RecipientModal({
@@ -33,6 +35,7 @@ function RecipientModal({
   loadingAccounts: boolean;
 }) {
   const [formData, setFormData] = useState<RecipientFormData>({
+    qboVendorId: initialData?.qboVendorId || '',
     payeeName: initialData?.payeeName || '',
     wiseEmail: initialData?.wiseEmail || '',
     targetCurrency: initialData?.targetCurrency || 'USD',
@@ -46,6 +49,7 @@ function RecipientModal({
   useEffect(() => {
     if (isOpen) {
       setFormData({
+        qboVendorId: initialData?.qboVendorId || '',
         payeeName: initialData?.payeeName || '',
         wiseEmail: initialData?.wiseEmail || '',
         targetCurrency: initialData?.targetCurrency || 'USD',
@@ -75,11 +79,16 @@ function RecipientModal({
   };
 
   const selectWiseAccount = (account: WiseAccount) => {
+    // For Wise-to-Wise contacts, there's no email - use the account summary as identifier
+    const isWiseToWise = account.type === 'wise';
     setFormData({
-      ...formData,
-      wiseEmail: account.email || '',
+      qboVendorId: formData.qboVendorId,  // Keep existing QBO vendor ID
+      payeeName: formData.payeeName || account.name,  // Auto-fill payee name if empty
+      // For Wise-to-Wise, store account summary (e.g. "Wise account") as identifier
+      wiseEmail: account.email || (isWiseToWise ? account.accountSummary : ''),
       targetCurrency: (account.currency === 'CAD' ? 'CAD' : 'USD') as 'USD' | 'CAD',
-      wiseContactId: account.id,
+      // Store contact UUID directly - no synthetic IDs
+      wiseContactId: account.contactUuid || undefined,
     });
     setShowAccountDropdown(false);
     setSearchQuery('');
@@ -115,7 +124,25 @@ function RecipientModal({
 
           <div>
             <label className="block text-sm font-medium mb-1">
-              Payee Name (from PartnerConnect)
+              QBO Vendor ID
+            </label>
+            <input
+              type="text"
+              value={formData.qboVendorId}
+              onChange={(e) => setFormData({ ...formData, qboVendorId: e.target.value })}
+              disabled={isEdit}
+              className="w-full px-3 py-2 border rounded-md bg-background font-mono text-sm disabled:bg-muted disabled:cursor-not-allowed"
+              placeholder="e.g., 123 or vendor-uuid"
+              required
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              {isEdit ? 'Cannot be changed' : 'Get this from the bill details in PartnerConnect'}
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              Payee Name (display only)
             </label>
             <input
               type="text"
@@ -128,7 +155,7 @@ function RecipientModal({
             />
             {isEdit && (
               <p className="text-xs text-muted-foreground mt-1">
-                Payee name cannot be changed
+                Cannot be changed
               </p>
             )}
           </div>
@@ -171,7 +198,11 @@ function RecipientModal({
                       <button
                         key={account.id}
                         type="button"
-                        onClick={() => selectWiseAccount(account)}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          selectWiseAccount(account);
+                        }}
                         className="w-full px-3 py-2 text-left hover:bg-muted flex justify-between items-center border-b last:border-b-0"
                       >
                         <div>
@@ -179,13 +210,24 @@ function RecipientModal({
                           {account.nickname && (
                             <div className="text-xs text-muted-foreground">{account.nickname}</div>
                           )}
-                          <div className="text-xs text-muted-foreground">{account.email}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {account.email || account.accountSummary}
+                          </div>
                         </div>
-                        <span className={`text-xs px-2 py-1 rounded ${
-                          account.currency === 'CAD' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'
-                        }`}>
-                          {account.currency}
-                        </span>
+                        <div className="flex flex-col items-end gap-1">
+                          <span className={`text-xs px-2 py-0.5 rounded ${
+                            account.type === 'wise'
+                              ? 'bg-teal-100 text-teal-800'
+                              : 'bg-slate-100 text-slate-800'
+                          }`}>
+                            {account.type === 'wise' ? 'Wise' : 'Bank'}
+                          </span>
+                          <span className={`text-xs px-2 py-0.5 rounded ${
+                            account.currency === 'CAD' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'
+                          }`}>
+                            {account.currency}
+                          </span>
+                        </div>
                       </button>
                     ))
                   )}
@@ -199,20 +241,20 @@ function RecipientModal({
 
           <div>
             <label className="block text-sm font-medium mb-1">
-              Wise Email
+              Wise Email / Identifier
             </label>
             <input
-              type="email"
+              type="text"
               value={formData.wiseEmail}
               onChange={(e) => setFormData({ ...formData, wiseEmail: e.target.value, wiseContactId: undefined })}
               className="w-full px-3 py-2 border rounded-md bg-background"
-              placeholder="e.g., payee@email.com"
-              required
+              placeholder="e.g., payee@email.com or Wise account"
+              required={!formData.wiseContactId}
             />
             <p className="text-xs text-muted-foreground mt-1">
               {formData.wiseContactId
-                ? `Linked to Wise contact #${formData.wiseContactId}`
-                : 'The email associated with their Wise account'}
+                ? `✓ Linked to Wise contact #${formData.wiseContactId}`
+                : 'Email for bank transfers, or "Wise account" for Wise-to-Wise'}
             </p>
           </div>
 
@@ -374,6 +416,7 @@ export function WiseRecipientsPage() {
                 <thead className="bg-muted/50">
                   <tr>
                     <th className="px-6 py-3 text-left text-sm font-medium">Payee Name</th>
+                    <th className="px-6 py-3 text-left text-sm font-medium">QBO Vendor</th>
                     <th className="px-6 py-3 text-left text-sm font-medium">Wise Email</th>
                     <th className="px-6 py-3 text-left text-sm font-medium">Currency</th>
                     <th className="px-6 py-3 text-left text-sm font-medium">Contact ID</th>
@@ -384,7 +427,8 @@ export function WiseRecipientsPage() {
                   {recipients.map((recipient) => (
                     <tr key={recipient.id} className="border-b hover:bg-muted/50">
                       <td className="px-6 py-4 font-medium">{recipient.payeeName}</td>
-                      <td className="px-6 py-4">{recipient.wiseEmail}</td>
+                      <td className="px-6 py-4 font-mono text-xs text-muted-foreground">{recipient.qboVendorId}</td>
+                      <td className="px-6 py-4">{recipient.wiseEmail || <span className="text-muted-foreground">—</span>}</td>
                       <td className="px-6 py-4">
                         <span className={`text-xs px-2 py-1 rounded font-medium ${
                           recipient.targetCurrency === 'USD'
@@ -447,6 +491,7 @@ export function WiseRecipientsPage() {
         onClose={() => setModalOpen(false)}
         onSave={handleSave}
         initialData={editingRecipient ? {
+          qboVendorId: editingRecipient.qboVendorId,
           payeeName: editingRecipient.payeeName,
           wiseEmail: editingRecipient.wiseEmail,
           targetCurrency: editingRecipient.targetCurrency as 'USD' | 'CAD',

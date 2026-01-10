@@ -14,6 +14,7 @@ import { authRoutes } from './routes/auth.js';
 import { billsRoutes } from './routes/bills.js';
 import { paymentsRoutes } from './routes/payments.js';
 import { wiseRecipientsRoutes } from './routes/wise-recipients.js';
+import { statusRoutes } from './routes/status.js';
 
 const fastify = Fastify({
   logger: {
@@ -63,6 +64,7 @@ async function main() {
   await fastify.register(billsRoutes, { prefix: '/api/bills' });
   await fastify.register(paymentsRoutes, { prefix: '/api/payments' });
   await fastify.register(wiseRecipientsRoutes, { prefix: '/api/wise-recipients' });
+  await fastify.register(statusRoutes, { prefix: '/api/status' });
 
   // Start server
   try {

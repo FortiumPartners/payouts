@@ -261,19 +261,31 @@ export class BillComClient {
   }
 
   /**
-   * Get vendor by ID using v2 Read/Vendor.json.
+   * Get vendor by ID using v2 List/Vendor.json with id filter.
+   * Note: Read/Vendor.json returns "Application key must be specified" error,
+   * so we use List with id filter instead.
    */
   async getVendor(vendorId: string): Promise<BillComVendor | null> {
     try {
-      const vendor = await this.request<{
+      const results = await this.request<Array<{
         id: string;
         isActive: string;
         name: string;
         email?: string;
         paymentEmail?: string;
         accNumber?: string;
-      }>('/Read/Vendor.json', { id: vendorId });
+      }>>(
+        '/List/Vendor.json',
+        {
+          start: 0,
+          max: 1,
+          filters: [{ field: 'id', op: '=', value: vendorId }],
+        }
+      );
 
+      if (!results || results.length === 0) return null;
+
+      const vendor = results[0];
       return {
         id: vendor.id,
         name: vendor.name,
@@ -397,38 +409,53 @@ export class BillComClient {
    * Pay a bill. Requires MFA-trusted session.
    * Note: v2 API uses PayBills.json endpoint.
    */
-  async payBill(billId: string, amount: number, processDate?: string): Promise<BillComPayment> {
+  async payBill(billId: string, vendorId: string, amount: number, processDate?: string): Promise<BillComPayment> {
     if (!this.sessionTrusted && !this.mfaId) {
       throw new BillComMfaRequired('MFA required for payments. Call initiateMfaChallenge() first.');
     }
 
-    // Get the bill first to get vendor ID
-    const bill = await this.getBill(billId);
-    if (!bill) {
-      throw new BillComError(`Bill not found: ${billId}`);
+    // Use provided date or next business day (tomorrow)
+    let payDate = processDate;
+    if (!payDate) {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      payDate = tomorrow.toISOString().split('T')[0];
     }
 
+    console.log(`[Bill.com] PayBills request: vendorId=${vendorId}, billId=${billId}, amount=${amount}, processDate=${payDate}`);
+
     // Create the payment using v2 PayBills endpoint
-    const result = await this.request<Array<{
-      id: string;
-      vendorId: string;
-      amount: number;
-      status: string;
-      processDate: string;
-    }>>('/PayBills.json', {
-      vendorId: bill.vendorId,
-      processDate: processDate || new Date().toISOString().split('T')[0],
+    const result = await this.request<unknown>('/PayBills.json', {
+      vendorId,
+      processDate: payDate,
       billPays: [{ billId, amount }],
     });
 
-    const payment = result[0];
+    // Response is a SentPay object with billPays array inside
+    const sentPay = result as {
+      id: string;
+      vendorId: string;
+      amount: number;
+      status?: string;
+      processDate?: string;
+      billPays?: Array<{ id: string; amount: number; processDate: string; paymentStatus: string }>;
+    };
+
+    console.log(`[Bill.com] PayBills response: id=${sentPay.id}, vendorId=${sentPay.vendorId}`);
+
+    if (!sentPay?.id) {
+      console.log(`[Bill.com] Unexpected response structure:`, result);
+      throw new BillComError(`Payment created but response format unexpected: ${JSON.stringify(result)}`);
+    }
+
+    const billPay = sentPay.billPays?.[0];
     return {
-      id: payment.id,
+      id: sentPay.id,
       billId: billId,
-      vendorId: payment.vendorId,
-      amount: payment.amount,
-      status: payment.status,
-      processDate: payment.processDate,
+      vendorId: sentPay.vendorId || vendorId,
+      amount: billPay?.amount || amount,
+      status: billPay?.paymentStatus === '1' ? 'scheduled' : 'pending',
+      processDate: billPay?.processDate || payDate,
     };
   }
 
@@ -444,6 +471,13 @@ export class BillComClient {
    */
   isMfaConfigured(): boolean {
     return !!this.mfaId;
+  }
+
+  /**
+   * Health check - verify we can login.
+   */
+  async healthCheck(): Promise<void> {
+    await this.login();
   }
 }
 

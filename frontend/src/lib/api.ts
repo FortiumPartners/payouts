@@ -42,6 +42,7 @@ export interface User {
 
 export interface WiseRecipient {
   id: string;
+  qboVendorId: string;
   payeeName: string;
   wiseEmail: string;
   targetCurrency: string;
@@ -59,12 +60,20 @@ export interface WiseAccount {
   country: string;
   type: string;
   accountSummary: string;
+  contactUuid: string | null;
 }
 
 export interface WiseBalance {
   currency: string;
   amount: number;
   reserved: number;
+}
+
+export interface IntegrationStatus {
+  name: string;
+  status: 'connected' | 'error' | 'not_configured';
+  message: string;
+  lastChecked: string;
 }
 
 class ApiClient {
@@ -119,6 +128,18 @@ class ApiClient {
 
   async getBill(id: string): Promise<Bill> {
     return this.request<Bill>(`/bills/${id}`);
+  }
+
+  async checkBillControls(billIds: string[]): Promise<{
+    results: Record<string, {
+      controls: ControlResult[];
+      readyToPay: boolean;
+    }>;
+  }> {
+    return this.request('/bills/check-controls', {
+      method: 'POST',
+      body: JSON.stringify({ billIds }),
+    });
   }
 
   async getPaymentStatus(): Promise<{
@@ -177,11 +198,16 @@ class ApiClient {
     return this.request('/wise-recipients/balance');
   }
 
+  async getIntegrationStatus(): Promise<{ integrations: IntegrationStatus[]; allHealthy: boolean }> {
+    return this.request('/status/integrations');
+  }
+
   async createWiseRecipient(data: {
+    qboVendorId: string;
     payeeName: string;
-    wiseEmail: string;
+    wiseEmail?: string;  // Optional for Wise-to-Wise contacts (use contactId instead)
     targetCurrency: 'USD' | 'CAD';
-    wiseContactId?: number;
+    wiseContactId?: string;  // Contact UUID from Wise API
   }): Promise<WiseRecipient> {
     return this.request('/wise-recipients', {
       method: 'POST',

@@ -1,7 +1,7 @@
 # Fortium Payouts
 
 > Control/validation layer for partner and subcontractor payouts
-> Last Updated: 2026-01-01
+> Last Updated: 2026-01-09
 
 ## Project Overview
 
@@ -25,7 +25,7 @@ Payouts is a validation layer that ensures bills approved in PartnerConnect meet
 - **Styling**: Tailwind CSS
 
 ### Infrastructure
-- **Database**: Supabase PostgreSQL
+- **Database**: Render PostgreSQL (shared `fortium-render-production-postgres`)
 - **Deployment**: Render.com
 - **Repository**: Public (fortiumpartners org) - NO SECRETS IN CODE
 
@@ -38,7 +38,18 @@ Payouts is a validation layer that ensures bills approved in PartnerConnect meet
 | Bill.com | US payments | API key |
 | Wise | Canada payments | API key |
 
-## Development Commands
+## Local Development
+
+Local dev connects directly to Render PostgreSQL (no local database).
+
+### Development URLs
+
+| Service  | URL |
+|----------|-----|
+| Frontend | http://localhost:3007 |
+| API      | http://localhost:8005 |
+
+### Commands
 
 ```bash
 # Install dependencies
@@ -48,33 +59,34 @@ cd frontend && npm install
 # Run development
 docker compose up -d
 
-# Database
+# Database (connects to Render postgres)
 docker compose exec api npx prisma generate
 docker compose exec api npx prisma db push
-docker compose exec api npx prisma migrate dev --name <name>
 ```
-
-## Environment Variables
-
-See `.env.example` for required variables. Never commit `.env`.
 
 ## Port Allocation
 
 | Service   | Internal | External (Dev) |
 |-----------|----------|----------------|
-| Database  | 5432     | 5436           |
 | API       | 8000     | 8005           |
 | Frontend  | 3000     | 3007           |
 
 ## Deployment (Render.com)
 
-Blueprint config in `render.yaml`. To deploy:
-1. Connect repo to Render dashboard
-2. Create new Blueprint from `render.yaml`
-3. Set environment variables in dashboard (secrets marked `sync: false`)
+### Production Services
+
+| Service | URL |
+|---------|-----|
+| API | https://payouts-czsw.onrender.com |
+| Frontend | https://payouts-prod-frontend.onrender.com |
+| Database | `payouts` db on `fortium-render-production-postgres` |
+
+### Service IDs
+- `srv-d5fbvlshg0os73f6p98g` - payouts-prod-api
+- `srv-d5fdap24d50c73f2lqb0` - payouts-prod-frontend
 
 **Required env vars for production:**
-- `DATABASE_URL` - Supabase pooled connection string
+- `DATABASE_URL` - Render Postgres internal connection string
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` - OAuth credentials
 - `BASE_URL` - Full URL of deployed API
 - `VITE_API_URL` - API URL for frontend

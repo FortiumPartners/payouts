@@ -2,9 +2,11 @@ import { Routes, Route, Navigate, Link } from 'react-router-dom';
 import { DollarSign, RefreshCw, LogOut, Loader2, AlertCircle, CheckCircle, Settings } from 'lucide-react';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { useBills } from './hooks/useBills';
+import { useBillControls } from './hooks/useBillControls';
 import { BillsList, ViewModeToggle, ViewMode } from './components/BillsList';
 import { PaymentConfirmationModal } from './components/PaymentConfirmationModal';
 import { WiseRecipientsPage } from './components/WiseRecipientsPage';
+import { IntegrationStatusPanel } from './components/IntegrationStatus';
 import { Bill, api } from './lib/api';
 import { useState } from 'react';
 
@@ -14,6 +16,7 @@ function Dashboard() {
   const [tenantFilter, setTenantFilter] = useState<'all' | 'US' | 'CA'>('all');
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const { bills, summary, loading, error, refresh } = useBills({ status: statusFilter, tenant: tenantFilter });
+  const { controlStates, isChecking, getBillWithControls } = useBillControls(bills);
   const [refreshing, setRefreshing] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState<{
     loading: boolean;
@@ -70,10 +73,17 @@ function Dashboard() {
       });
     }
 
-    // Clear status after 5 seconds
-    setTimeout(() => {
-      setPaymentStatus({ loading: false, success: null, message: null, billId: null });
-    }, 5000);
+    // Only auto-clear success messages after 5 seconds
+    // Errors should stay visible until manually dismissed
+    if (paymentStatus.success) {
+      setTimeout(() => {
+        setPaymentStatus({ loading: false, success: null, message: null, billId: null });
+      }, 5000);
+    }
+  };
+
+  const dismissPaymentStatus = () => {
+    setPaymentStatus({ loading: false, success: null, message: null, billId: null });
   };
 
   const handleCancelPayment = () => {
@@ -86,7 +96,10 @@ function Dashboard() {
       currency: 'USD',
     }).format(amount);
 
-  const readyAmount = bills
+  // Get bills with latest control states applied
+  const billsWithControls = bills.map(getBillWithControls);
+  const readyCount = billsWithControls.filter((b) => b.readyToPay).length;
+  const readyAmount = billsWithControls
     .filter((b) => b.readyToPay)
     .reduce((sum, b) => sum + b.amount, 0);
 
@@ -106,10 +119,10 @@ function Dashboard() {
             <Link
               to="/wise-recipients"
               className="flex items-center gap-2 px-4 py-2 rounded-md border hover:bg-muted"
-              title="Manage Wise Recipients"
+              title="Manage Wise Recipients (Canada)"
             >
               <Settings className="h-4 w-4" />
-              Recipients
+              Wise Recipients
             </Link>
             <button
               onClick={handleRefresh}
@@ -132,48 +145,70 @@ function Dashboard() {
 
       {/* Main content */}
       <main className="container mx-auto px-4 py-8">
-        {/* Payment status notification */}
-        {paymentStatus.message && (
-          <div
-            className={`mb-4 p-4 rounded-lg flex items-center gap-3 ${
-              paymentStatus.success
-                ? 'bg-green-50 border border-green-200 text-green-800'
-                : 'bg-red-50 border border-red-200 text-red-800'
-            }`}
-          >
-            {paymentStatus.success ? (
-              <CheckCircle className="h-5 w-5" />
-            ) : (
-              <AlertCircle className="h-5 w-5" />
+        {/* Payment status notification - FIXED position so always visible */}
+        {(paymentStatus.message || paymentStatus.loading) && (
+          <div className="fixed bottom-4 right-4 left-4 md:left-auto md:w-96 z-50">
+            {paymentStatus.loading && (
+              <div className="p-4 rounded-lg flex items-center gap-3 bg-blue-50 border border-blue-200 text-blue-800 shadow-lg">
+                <Loader2 className="h-5 w-5 animate-spin flex-shrink-0" />
+                <span>Processing payment...</span>
+              </div>
             )}
-            <span>{paymentStatus.message}</span>
-          </div>
-        )}
-
-        {paymentStatus.loading && (
-          <div className="mb-4 p-4 rounded-lg flex items-center gap-3 bg-blue-50 border border-blue-200 text-blue-800">
-            <Loader2 className="h-5 w-5 animate-spin" />
-            <span>Processing payment...</span>
+            {paymentStatus.message && (
+              <div
+                className={`p-4 rounded-lg flex items-start gap-3 shadow-lg ${
+                  paymentStatus.success
+                    ? 'bg-green-50 border border-green-200 text-green-800'
+                    : 'bg-red-50 border border-red-200 text-red-800'
+                }`}
+              >
+                {paymentStatus.success ? (
+                  <CheckCircle className="h-5 w-5 flex-shrink-0 mt-0.5" />
+                ) : (
+                  <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5" />
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium">{paymentStatus.success ? 'Payment Successful' : 'Payment Failed'}</p>
+                  <p className="text-sm mt-1 break-words">{paymentStatus.message}</p>
+                </div>
+                <button
+                  onClick={dismissPaymentStatus}
+                  className="flex-shrink-0 p-1 hover:bg-black/10 rounded"
+                  title="Dismiss"
+                >
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            )}
           </div>
         )}
 
         {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
           <div className="rounded-lg border bg-card p-6">
             <p className="text-sm text-muted-foreground">Ready to Pay</p>
-            <p className="text-2xl font-bold">{summary?.readyToPay || 0}</p>
+            <p className="text-2xl font-bold">{readyCount}</p>
             <p className="text-sm text-muted-foreground">
               {formatAmount(readyAmount)}
             </p>
           </div>
           <div className="rounded-lg border bg-card p-6">
-            <p className="text-sm text-muted-foreground">Pending Controls</p>
-            <p className="text-2xl font-bold">{summary?.pending || 0}</p>
+            <p className="text-sm text-muted-foreground">
+              {isChecking ? 'Checking Controls...' : 'Pending Controls'}
+            </p>
+            <p className="text-2xl font-bold">{billsWithControls.length - readyCount}</p>
           </div>
           <div className="rounded-lg border bg-card p-6">
             <p className="text-sm text-muted-foreground">Total Bills</p>
             <p className="text-2xl font-bold">{summary?.total || 0}</p>
           </div>
+        </div>
+
+        {/* Integration Status */}
+        <div className="mb-6">
+          <IntegrationStatusPanel />
         </div>
 
         {/* Filter tabs */}
@@ -222,14 +257,21 @@ function Dashboard() {
 
         {/* Bills table */}
         <div className="rounded-lg border bg-card">
-          <div className="border-b px-6 py-4">
+          <div className="border-b px-6 py-4 flex items-center justify-between">
             <h2 className="font-semibold">Bills</h2>
+            {isChecking && (
+              <span className="text-sm text-muted-foreground flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Checking controls...
+              </span>
+            )}
           </div>
           <BillsList
-            bills={bills}
+            bills={billsWithControls}
             loading={loading}
             error={error}
             viewMode={viewMode}
+            controlStates={controlStates}
             onPayBill={handlePayBill}
           />
         </div>

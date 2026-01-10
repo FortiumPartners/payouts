@@ -146,33 +146,53 @@ export function PaymentConfirmationModal({
           </div>
 
           {/* Wise balance for CA bills */}
-          {bill.tenantCode === 'CA' && (
-            <div className="mt-4 p-3 bg-muted/50 rounded-lg">
-              <div className="flex items-center gap-2 mb-2">
-                <Wallet className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm font-medium">Wise Balance</span>
-              </div>
-              {loadingBalance ? (
-                <div className="text-sm text-muted-foreground">Loading...</div>
-              ) : wiseBalances.length > 0 ? (
-                <div className="flex gap-4">
-                  {wiseBalances.map((b) => (
-                    <div key={b.currency} className="text-sm">
-                      <span className="font-medium">
-                        {new Intl.NumberFormat('en-US', {
-                          style: 'currency',
-                          currency: b.currency,
-                        }).format(b.amount)}
-                      </span>
-                      <span className="text-muted-foreground ml-1">{b.currency}</span>
+          {bill.tenantCode === 'CA' && (() => {
+            const cadBalance = wiseBalances.find(b => b.currency === 'CAD');
+            const available = cadBalance ? cadBalance.amount - cadBalance.reserved : 0;
+            const isInsufficient = !loadingBalance && cadBalance && available < bill.amount;
+
+            return (
+              <>
+                {isInsufficient && (
+                  <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
+                    <AlertTriangle className="h-5 w-5 text-red-600 flex-shrink-0 mt-0.5" />
+                    <div className="text-sm text-red-800">
+                      <p className="font-medium">Insufficient Balance</p>
+                      <p>
+                        CAD {available.toFixed(2)} available, but {formatAmount(bill.amount)} required.
+                        Payment may fail.
+                      </p>
                     </div>
-                  ))}
+                  </div>
+                )}
+                <div className="mt-4 p-3 bg-muted/50 rounded-lg">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Wallet className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm font-medium">Wise Balance</span>
+                  </div>
+                  {loadingBalance ? (
+                    <div className="text-sm text-muted-foreground">Loading...</div>
+                  ) : wiseBalances.length > 0 ? (
+                    <div className="flex gap-4">
+                      {wiseBalances.map((b) => (
+                        <div key={b.currency} className="text-sm">
+                          <span className="font-medium">
+                            {new Intl.NumberFormat('en-US', {
+                              style: 'currency',
+                              currency: b.currency,
+                            }).format(b.amount)}
+                          </span>
+                          <span className="text-muted-foreground ml-1">{b.currency}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-muted-foreground">Unable to load balance</div>
+                  )}
                 </div>
-              ) : (
-                <div className="text-sm text-muted-foreground">Unable to load balance</div>
-              )}
-            </div>
-          )}
+              </>
+            );
+          })()}
 
           {/* Type-to-confirm input for large amounts */}
           {requiresTypeConfirm && (

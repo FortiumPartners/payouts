@@ -1,11 +1,136 @@
 /**
  * Bills list component with control status display.
  * Supports list view and grouped-by-payee view.
+ * Controls are grouped by integration (PartnerConnect, QuickBooks, Bill.com/Wise, General).
  */
 
 import { useState, useMemo } from 'react';
-import { Check, X, ChevronDown, ChevronUp, Loader2, Users, List } from 'lucide-react';
-import { Bill } from '../lib/api';
+import { Check, X, ChevronDown, ChevronUp, Loader2, Users, List, Building2, FileSpreadsheet, CreditCard, Settings2 } from 'lucide-react';
+import { Bill, ControlResult } from '../lib/api';
+import { BillControlStatus } from './BillControlStatus';
+import { BillControlState } from '../hooks/useBillControls';
+
+// Control groupings by integration
+type IntegrationGroup = 'partnerconnect' | 'quickbooks' | 'payment' | 'general';
+
+interface ControlGroup {
+  id: IntegrationGroup;
+  name: string;
+  icon: React.ReactNode;
+  bgColor: string;
+  borderColor: string;
+  controls: ControlResult[];
+}
+
+// Map control names to their integration
+const controlIntegrationMap: Record<string, IntegrationGroup> = {
+  // PartnerConnect
+  billApprovedInPC: 'partnerconnect',
+  payeeExistsInPC: 'partnerconnect',
+  // QuickBooks
+  invoiceExistsInQbo: 'quickbooks',
+  invoicePaid: 'quickbooks',
+  invoiceNotVoided: 'quickbooks',
+  billExistsInQbo: 'quickbooks',
+  vendorExistsInQbo: 'quickbooks',
+  // Bill.com (US)
+  vendorExistsInBillCom: 'payment',
+  billExistsInBillCom: 'payment',
+  billApprovedInBillCom: 'payment',
+  // Wise (CA)
+  recipientMappedInSystem: 'payment',
+  recipientExistsInWise: 'payment',
+  wisePaymentReady: 'payment',
+  // General
+  notAlreadyPaid: 'general',
+  provingPeriod: 'general',
+  amountValid: 'general',
+};
+
+function groupControlsByIntegration(controls: ControlResult[], tenantCode: 'US' | 'CA'): ControlGroup[] {
+  const groups: Record<IntegrationGroup, ControlResult[]> = {
+    partnerconnect: [],
+    quickbooks: [],
+    payment: [],
+    general: [],
+  };
+
+  controls.forEach(control => {
+    const group = controlIntegrationMap[control.name] || 'general';
+    groups[group].push(control);
+  });
+
+  const result: ControlGroup[] = [];
+
+  if (groups.partnerconnect.length > 0) {
+    result.push({
+      id: 'partnerconnect',
+      name: 'PartnerConnect',
+      icon: <Building2 className="h-4 w-4" />,
+      bgColor: 'bg-indigo-50',
+      borderColor: 'border-indigo-200',
+      controls: groups.partnerconnect,
+    });
+  }
+
+  if (groups.quickbooks.length > 0) {
+    result.push({
+      id: 'quickbooks',
+      name: 'QuickBooks',
+      icon: <FileSpreadsheet className="h-4 w-4" />,
+      bgColor: 'bg-green-50',
+      borderColor: 'border-green-200',
+      controls: groups.quickbooks,
+    });
+  }
+
+  if (groups.payment.length > 0) {
+    result.push({
+      id: 'payment',
+      name: tenantCode === 'US' ? 'Bill.com' : 'Wise',
+      icon: <CreditCard className="h-4 w-4" />,
+      bgColor: tenantCode === 'US' ? 'bg-sky-50' : 'bg-teal-50',
+      borderColor: tenantCode === 'US' ? 'border-sky-300' : 'border-teal-300',
+      controls: groups.payment,
+    });
+  }
+
+  if (groups.general.length > 0) {
+    result.push({
+      id: 'general',
+      name: 'General',
+      icon: <Settings2 className="h-4 w-4" />,
+      bgColor: 'bg-gray-50',
+      borderColor: 'border-gray-200',
+      controls: groups.general,
+    });
+  }
+
+  return result;
+}
+
+// Format camelCase control names to human-readable
+function formatControlName(name: string): string {
+  const nameMap: Record<string, string> = {
+    billApprovedInPC: 'Bill Approved',
+    payeeExistsInPC: 'Payee Exists',
+    invoiceExistsInQbo: 'Invoice Exists',
+    invoicePaid: 'Invoice Paid',
+    invoiceNotVoided: 'Invoice Active',
+    billExistsInQbo: 'Bill Exists',
+    vendorExistsInQbo: 'Vendor Linked',
+    vendorExistsInBillCom: 'Vendor Exists',
+    billExistsInBillCom: 'Bill Exists',
+    billApprovedInBillCom: 'Bill Approved',
+    recipientMappedInSystem: 'Recipient Mapped',
+    recipientExistsInWise: 'Contact Exists',
+    wisePaymentReady: 'Payment Ready',
+    notAlreadyPaid: 'Not Already Paid',
+    provingPeriod: 'Proving Period',
+    amountValid: 'Amount Valid',
+  };
+  return nameMap[name] || name;
+}
 
 export type ViewMode = 'list' | 'grouped';
 
@@ -14,6 +139,7 @@ interface BillsListProps {
   loading: boolean;
   error: string | null;
   viewMode: ViewMode;
+  controlStates: Map<string, BillControlState>;
   onPayBill?: (bill: Bill) => void;
 }
 
@@ -33,15 +159,6 @@ function ControlIcon({ passed }: { passed: boolean }) {
   );
 }
 
-/** Simple status summary - "Ready" or "X issues" */
-function ControlSummary({ controls, readyToPay }: { controls: Bill['controls']; readyToPay: boolean }) {
-  const failed = controls.filter(c => !c.passed).length;
-  if (readyToPay) {
-    return <span className="text-green-600 text-sm font-medium">Ready</span>;
-  }
-  return <span className="text-yellow-600 text-sm font-medium">{failed} {failed === 1 ? 'issue' : 'issues'}</span>;
-}
-
 function formatAmount(amount: number): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -52,21 +169,31 @@ function formatAmount(amount: number): string {
 /** Individual bill row for list view */
 function BillRow({
   bill,
+  controlState,
   onPay,
   indented = false,
 }: {
   bill: Bill;
+  controlState?: BillControlState;
   onPay?: (bill: Bill) => void;
   indented?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+
+  const handleExpand = () => {
+    setExpanded(!expanded);
+  };
+
+  // Use controls from controlState if available, otherwise from bill
+  const controls = controlState?.controls || bill.controls;
+  const readyToPay = controlState?.readyToPay ?? bill.readyToPay;
 
   return (
     <>
       <tr className={`border-b hover:bg-muted/50 ${indented ? 'bg-muted/20' : ''}`}>
         <td className={`px-4 py-3 ${indented ? 'pl-8' : ''}`}>
           <button
-            onClick={() => setExpanded(!expanded)}
+            onClick={handleExpand}
             className="p-1 hover:bg-muted rounded"
           >
             {expanded ? (
@@ -92,19 +219,26 @@ function BillRow({
           {bill.qboInvoiceNum || '-'}
         </td>
         <td className="px-4 py-3">
-          <ControlSummary controls={bill.controls} readyToPay={bill.readyToPay} />
+          <BillControlStatus
+            state={controlState}
+            onDetailsClick={handleExpand}
+          />
         </td>
         <td className="px-4 py-3">
           <button
             onClick={() => onPay?.(bill)}
-            disabled={!bill.readyToPay}
+            disabled={!readyToPay || controlState?.status === 'checking'}
             className={`px-3 py-1 rounded text-sm font-medium ${
-              bill.readyToPay
+              readyToPay
                 ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                : controlState?.status === 'checking'
+                ? 'bg-muted text-muted-foreground cursor-wait'
                 : 'bg-muted text-muted-foreground cursor-not-allowed'
             }`}
-            title={bill.readyToPay
+            title={readyToPay
               ? `Pay via ${bill.tenantCode === 'CA' ? 'Wise' : 'Bill.com'}`
+              : controlState?.status === 'checking'
+              ? 'Checking controls...'
               : 'Controls not passed'}
           >
             Pay
@@ -115,62 +249,120 @@ function BillRow({
         <tr className="bg-muted/30">
           <td colSpan={8} className={`px-4 py-4 ${indented ? 'pl-8' : ''}`}>
             <div className="grid grid-cols-3 gap-4">
-              <div>
-                <h4 className="font-medium mb-2">Control Details</h4>
-                <div className="space-y-2">
-                  {bill.controls.map((control) => (
-                    <div
-                      key={control.name}
-                      className="flex items-start gap-2 text-sm"
-                    >
-                      <ControlIcon passed={control.passed} />
-                      <div>
-                        <span className="font-medium">{control.name}</span>
-                        {control.reason && (
-                          <p className="text-muted-foreground">
-                            {control.reason}
-                          </p>
-                        )}
+              <div className="col-span-2">
+                <h4 className="font-medium mb-3">Control Details</h4>
+                {controlState?.status === 'checking' ? (
+                  <div className="flex items-center gap-2 text-muted-foreground py-4">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    <span>Checking controls...</span>
+                  </div>
+                ) : controls.length === 0 ? (
+                  <div className="text-muted-foreground py-4">No controls loaded</div>
+                ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  {groupControlsByIntegration(controls, bill.tenantCode).map((group) => {
+                    const allPassed = group.controls.every(c => c.passed);
+                    const failedCount = group.controls.filter(c => !c.passed).length;
+                    return (
+                      <div
+                        key={group.id}
+                        className={`rounded-lg border p-3 ${group.bgColor} ${group.borderColor}`}
+                      >
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-muted-foreground">{group.icon}</span>
+                          <span className="font-medium text-sm">{group.name}</span>
+                          {allPassed ? (
+                            <Check className="h-4 w-4 text-green-600 ml-auto" />
+                          ) : (
+                            <span className="text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded ml-auto">
+                              {failedCount} issue{failedCount !== 1 ? 's' : ''}
+                            </span>
+                          )}
+                        </div>
+                        <div className="space-y-1.5">
+                          {group.controls.map((control) => (
+                            <div
+                              key={control.name}
+                              className="flex items-start gap-2 text-sm"
+                            >
+                              <ControlIcon passed={control.passed} />
+                              <div className="min-w-0 flex-1">
+                                <span className="font-medium text-xs">{formatControlName(control.name)}</span>
+                                {control.reason && (
+                                  <p className="text-muted-foreground text-xs truncate" title={control.reason}>
+                                    {control.reason}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
+                )}
               </div>
               <div>
-                <h4 className="font-medium mb-2">Bill Details</h4>
-                <dl className="text-sm space-y-1">
-                  <div>
-                    <dt className="text-muted-foreground inline">Bill ID: </dt>
-                    <dd className="inline font-mono text-xs">{bill.uid}</dd>
+                <h4 className="font-medium mb-3">Bill Details</h4>
+                <div className="space-y-3">
+                  {/* PartnerConnect */}
+                  <div className="text-sm">
+                    <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">PartnerConnect</div>
+                    <dl className="space-y-0.5">
+                      <div>
+                        <dt className="text-muted-foreground inline">Bill: </dt>
+                        <dd className="inline font-mono text-xs">{bill.uid}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground inline">Status: </dt>
+                        <dd className="inline">{bill.status}</dd>
+                      </div>
+                    </dl>
                   </div>
-                  <div>
-                    <dt className="text-muted-foreground inline">Status: </dt>
-                    <dd className="inline">{bill.status}</dd>
+
+                  {/* QuickBooks */}
+                  <div className="text-sm">
+                    <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">QuickBooks</div>
+                    <dl className="space-y-0.5">
+                      <div>
+                        <dt className="text-muted-foreground inline">Invoice: </dt>
+                        <dd className="inline font-mono">{bill.qboInvoiceNum || '-'}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground inline">Bill: </dt>
+                        <dd className="inline font-mono">{bill.qboBillNum || '-'}</dd>
+                      </div>
+                    </dl>
                   </div>
-                  <div>
-                    <dt className="text-muted-foreground inline">Description: </dt>
-                    <dd className="inline">{bill.description || '-'}</dd>
+
+                  {/* Bill.com or Wise */}
+                  <div className="text-sm">
+                    <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">
+                      {bill.tenantCode === 'US' ? 'Bill.com' : 'Wise'}
+                    </div>
+                    <dl className="space-y-0.5">
+                      {bill.tenantCode === 'US' ? (
+                        <div>
+                          <dt className="text-muted-foreground inline">Bill: </dt>
+                          <dd className="inline font-mono">{bill.billComId || '-'}</dd>
+                        </div>
+                      ) : (
+                        <div>
+                          <dt className="text-muted-foreground inline">Payment: </dt>
+                          <dd className="inline">CAD transfer</dd>
+                        </div>
+                      )}
+                    </dl>
                   </div>
-                </dl>
-              </div>
-              <div>
-                <h4 className="font-medium mb-2">External References</h4>
-                <dl className="text-sm space-y-1">
-                  <div>
-                    <dt className="text-muted-foreground inline">QBO Invoice: </dt>
-                    <dd className="inline font-mono">{bill.qboInvoiceNum || '-'}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-muted-foreground inline">QBO Bill: </dt>
-                    <dd className="inline font-mono">{bill.qboBillNum || '-'}</dd>
-                  </div>
-                  {bill.tenantCode === 'US' && (
-                    <div>
-                      <dt className="text-muted-foreground inline">Bill.com: </dt>
-                      <dd className="inline font-mono">{bill.billComId || '-'}</dd>
+
+                  {/* Description */}
+                  {bill.description && (
+                    <div className="text-sm pt-2 border-t">
+                      <div className="text-muted-foreground text-xs">{bill.description}</div>
                     </div>
                   )}
-                </dl>
+                </div>
               </div>
             </div>
           </td>
@@ -183,9 +375,11 @@ function BillRow({
 /** Payee group row for grouped view */
 function PayeeGroupRow({
   group,
+  controlStates,
   onPay,
 }: {
   group: PayeeGroup;
+  controlStates: Map<string, BillControlState>;
   onPay?: (bill: Bill) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -229,14 +423,28 @@ function PayeeGroupRow({
         <td className="px-4 py-3"></td>
       </tr>
       {expanded && group.bills.map((bill) => (
-        <BillRow key={bill.uid} bill={bill} onPay={onPay} indented />
+        <BillRow
+          key={bill.uid}
+          bill={bill}
+          controlState={controlStates.get(bill.uid)}
+          onPay={onPay}
+          indented
+        />
       ))}
     </>
   );
 }
 
 /** List view table */
-function ListView({ bills, onPayBill }: { bills: Bill[]; onPayBill?: (bill: Bill) => void }) {
+function ListView({
+  bills,
+  controlStates,
+  onPayBill,
+}: {
+  bills: Bill[];
+  controlStates: Map<string, BillControlState>;
+  onPayBill?: (bill: Bill) => void;
+}) {
   return (
     <table className="w-full">
       <thead className="bg-muted/50">
@@ -253,7 +461,12 @@ function ListView({ bills, onPayBill }: { bills: Bill[]; onPayBill?: (bill: Bill
       </thead>
       <tbody>
         {bills.map((bill) => (
-          <BillRow key={bill.uid} bill={bill} onPay={onPayBill} />
+          <BillRow
+            key={bill.uid}
+            bill={bill}
+            controlState={controlStates.get(bill.uid)}
+            onPay={onPayBill}
+          />
         ))}
       </tbody>
     </table>
@@ -261,7 +474,15 @@ function ListView({ bills, onPayBill }: { bills: Bill[]; onPayBill?: (bill: Bill
 }
 
 /** Grouped view table */
-function GroupedView({ bills, onPayBill }: { bills: Bill[]; onPayBill?: (bill: Bill) => void }) {
+function GroupedView({
+  bills,
+  controlStates,
+  onPayBill,
+}: {
+  bills: Bill[];
+  controlStates: Map<string, BillControlState>;
+  onPayBill?: (bill: Bill) => void;
+}) {
   const groups = useMemo(() => {
     const groupMap = new Map<string, Bill[]>();
     bills.forEach(bill => {
@@ -270,12 +491,12 @@ function GroupedView({ bills, onPayBill }: { bills: Bill[]; onPayBill?: (bill: B
     });
 
     return Array.from(groupMap.entries())
-      .map(([payeeName, bills]): PayeeGroup => ({
+      .map(([payeeName, groupBills]): PayeeGroup => ({
         payeeName,
-        bills,
-        totalAmount: bills.reduce((sum, b) => sum + b.amount, 0),
-        readyCount: bills.filter(b => b.readyToPay).length,
-        issueCount: bills.filter(b => !b.readyToPay).length,
+        bills: groupBills,
+        totalAmount: groupBills.reduce((sum, b) => sum + b.amount, 0),
+        readyCount: groupBills.filter(b => b.readyToPay).length,
+        issueCount: groupBills.filter(b => !b.readyToPay).length,
       }))
       .sort((a, b) => b.totalAmount - a.totalAmount); // Sort by total amount desc
   }, [bills]);
@@ -294,14 +515,19 @@ function GroupedView({ bills, onPayBill }: { bills: Bill[]; onPayBill?: (bill: B
       </thead>
       <tbody>
         {groups.map((group) => (
-          <PayeeGroupRow key={group.payeeName} group={group} onPay={onPayBill} />
+          <PayeeGroupRow
+            key={group.payeeName}
+            group={group}
+            controlStates={controlStates}
+            onPay={onPayBill}
+          />
         ))}
       </tbody>
     </table>
   );
 }
 
-export function BillsList({ bills, loading, error, viewMode, onPayBill }: BillsListProps) {
+export function BillsList({ bills, loading, error, viewMode, controlStates, onPayBill }: BillsListProps) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -332,9 +558,9 @@ export function BillsList({ bills, loading, error, viewMode, onPayBill }: BillsL
   return (
     <div className="overflow-x-auto">
       {viewMode === 'list' ? (
-        <ListView bills={bills} onPayBill={onPayBill} />
+        <ListView bills={bills} controlStates={controlStates} onPayBill={onPayBill} />
       ) : (
-        <GroupedView bills={bills} onPayBill={onPayBill} />
+        <GroupedView bills={bills} controlStates={controlStates} onPayBill={onPayBill} />
       )}
     </div>
   );
