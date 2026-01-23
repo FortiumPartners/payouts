@@ -1,5 +1,12 @@
 // Fortium Payouts - Database Schema
-// Using Supabase PostgreSQL
+// Using Render PostgreSQL
+//
+// ⚠️  IMPORTANT: Before running `prisma db push` with schema changes:
+//     1. Run: npm run db:backup-wise-recipients
+//     2. Review the schema diff carefully
+//     3. If data loss occurs, restore with: npm run db:restore-wise-recipients
+//
+// This project uses db push (not migrations). Schema changes can cause data loss!
 
 generator client {
   provider      = "prisma-client-js"

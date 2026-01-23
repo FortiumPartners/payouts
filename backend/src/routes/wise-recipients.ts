@@ -44,6 +44,38 @@ export const wiseRecipientsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', requireAuth);
 
   /**
+   * GET /api/wise-recipients/ca-payees - List CA payees from payment history
+   * Debug endpoint to help rebuild wise_recipients mappings
+   * TEMP: No auth required for data recovery
+   */
+  fastify.get('/ca-payees', {
+    config: { skipAuth: true },
+    schema: {
+      response: {
+        200: z.object({
+          payees: z.array(z.object({
+            payeeName: z.string(),
+            payeeVendorId: z.string(),
+            payeeEmail: z.string().nullable(),
+          })),
+        }),
+      },
+    },
+  }, async () => {
+    const payments = await prisma.paymentRecord.findMany({
+      where: { tenantId: 'ca1' },
+      select: {
+        payeeName: true,
+        payeeVendorId: true,
+        payeeEmail: true,
+      },
+      distinct: ['payeeVendorId'],
+    });
+
+    return { payees: payments };
+  });
+
+  /**
    * GET /api/wise-recipients - List all recipients
    */
   fastify.get('/', {
