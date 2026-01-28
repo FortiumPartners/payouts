@@ -306,6 +306,49 @@ export class PartnerConnectClient {
   }
 
   /**
+   * Fetch paid bills (historical payments).
+   * Uses /api/bills/explorers and filters for:
+   * - ProcessCode = 'Paid' OR paidDate is set
+   */
+  async getPaidBills(options?: {
+    startDate?: string;
+    endDate?: string;
+    tenant?: 'US' | 'CA' | 'all';
+  }): Promise<PCBill[]> {
+    const data = await this.request<any[]>('GET', '/api/bills/explorers');
+
+    // Filter for paid bills
+    let paid = data.filter(bill =>
+      bill.ProcessCode === 'Paid' || bill.PaidDate
+    );
+
+    // Apply date filters
+    if (options?.startDate) {
+      const start = new Date(options.startDate);
+      paid = paid.filter(bill => {
+        const paidDate = bill.PaidDate ? new Date(bill.PaidDate) : null;
+        return paidDate && paidDate >= start;
+      });
+    }
+
+    if (options?.endDate) {
+      const end = new Date(options.endDate);
+      end.setHours(23, 59, 59, 999); // Include entire end day
+      paid = paid.filter(bill => {
+        const paidDate = bill.PaidDate ? new Date(bill.PaidDate) : null;
+        return paidDate && paidDate <= end;
+      });
+    }
+
+    // Apply tenant filter
+    if (options?.tenant && options.tenant !== 'all') {
+      paid = paid.filter(bill => bill.TenantCode === options.tenant);
+    }
+
+    return paid.map(bill => this.mapBill(bill));
+  }
+
+  /**
    * Check if client is configured.
    */
   isConfigured(): boolean {

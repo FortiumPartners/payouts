@@ -20,6 +20,54 @@ const paymentStatusSchema = z.object({
   trusted: z.boolean(),
 });
 
+// Payment history schemas
+const paymentHistoryQuerySchema = z.object({
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+  payeeIds: z.string().optional(), // Comma-separated
+  clientIds: z.string().optional(), // Comma-separated
+  tenant: z.enum(['US', 'CA', 'all']).optional().default('all'),
+  paymentMethod: z.string().optional(), // Comma-separated: bill_com, wise, payouts
+  minAmount: z.coerce.number().optional(),
+  maxAmount: z.coerce.number().optional(),
+  status: z.string().optional(), // Comma-separated: paid, pending, failed
+  page: z.coerce.number().optional().default(1),
+  pageSize: z.coerce.number().optional().default(50),
+});
+
+const paymentItemSchema = z.object({
+  id: z.string(),
+  pcBillId: z.string(),
+  paidDate: z.string().nullable(),
+  payeeName: z.string(),
+  payeeId: z.string(),
+  amount: z.number(),
+  currency: z.enum(['USD', 'CAD']),
+  status: z.enum(['paid', 'pending', 'failed']),
+  clientName: z.string(),
+  tenantCode: z.enum(['US', 'CA']),
+  paymentMethod: z.string(),
+});
+
+const paymentHistoryResponseSchema = z.object({
+  payments: z.array(paymentItemSchema),
+  total: z.number(),
+  page: z.number(),
+  pageSize: z.number(),
+  filters: z.object({
+    payees: z.array(z.object({ id: z.string(), name: z.string() })),
+    clients: z.array(z.object({ id: z.string(), name: z.string() })),
+  }),
+});
+
+const paymentDetailSchema = paymentItemSchema.extend({
+  invoiceNumber: z.string().nullable(),
+  billNumber: z.string().nullable(),
+  referenceNumber: z.string().nullable(),
+  pcBillLink: z.string().nullable(),
+  description: z.string(),
+});
+
 const mfaChallengeSchema = z.object({
   challengeId: z.string(),
   message: z.string(),
@@ -43,6 +91,178 @@ const paymentResultSchema = z.object({
 export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
   // Apply auth to all routes
   fastify.addHook('preHandler', requireAuth);
+
+  /**
+   * GET /api/payments/history - List payment history with filters
+   */
+  fastify.get('/history', {
+    schema: {
+      querystring: paymentHistoryQuerySchema,
+      response: {
+        200: paymentHistoryResponseSchema,
+      },
+    },
+  }, async (request) => {
+    const query = request.query as z.infer<typeof paymentHistoryQuerySchema>;
+    const pcClient = getPartnerConnectClient();
+
+    // Fetch paid bills from PartnerConnect
+    const paidBills = await pcClient.getPaidBills({
+      startDate: query.startDate,
+      endDate: query.endDate,
+      tenant: query.tenant === 'all' ? undefined : query.tenant,
+    });
+
+    // Apply additional filters
+    let filtered = paidBills;
+
+    // Payee filter
+    if (query.payeeIds) {
+      const payeeIds = query.payeeIds.split(',').map(s => s.trim().toLowerCase());
+      filtered = filtered.filter(bill =>
+        payeeIds.some(id =>
+          bill.resourceUid.toLowerCase() === id ||
+          bill.resourceName.toLowerCase().includes(id)
+        )
+      );
+    }
+
+    // Client filter
+    if (query.clientIds) {
+      const clientIds = query.clientIds.split(',').map(s => s.trim().toLowerCase());
+      filtered = filtered.filter(bill =>
+        clientIds.some(id =>
+          bill.clientName.toLowerCase().includes(id)
+        )
+      );
+    }
+
+    // Payment method filter (derive from tenant)
+    if (query.paymentMethod) {
+      const methods = query.paymentMethod.split(',').map(s => s.trim().toLowerCase());
+      filtered = filtered.filter(bill => {
+        const method = bill.tenantCode === 'CA' ? 'wise' : 'bill_com';
+        return methods.includes(method) || methods.includes('payouts');
+      });
+    }
+
+    // Amount range filter
+    if (query.minAmount !== undefined) {
+      filtered = filtered.filter(bill => bill.total >= query.minAmount!);
+    }
+    if (query.maxAmount !== undefined) {
+      filtered = filtered.filter(bill => bill.total <= query.maxAmount!);
+    }
+
+    // Status filter (all paid bills are 'paid' by definition)
+    if (query.status) {
+      const statuses = query.status.split(',').map(s => s.trim().toLowerCase());
+      // For now, only 'paid' status exists in historical data
+      if (!statuses.includes('paid')) {
+        filtered = [];
+      }
+    }
+
+    // Sort by paid date descending (most recent first)
+    filtered.sort((a, b) => {
+      const dateA = a.paidDate ? new Date(a.paidDate).getTime() : 0;
+      const dateB = b.paidDate ? new Date(b.paidDate).getTime() : 0;
+      return dateB - dateA;
+    });
+
+    // Extract unique payees and clients for filter dropdowns
+    const payeeMap = new Map<string, string>();
+    const clientMap = new Map<string, string>();
+    paidBills.forEach(bill => {
+      if (bill.resourceUid && bill.resourceName) {
+        payeeMap.set(bill.resourceUid, bill.resourceName);
+      }
+      if (bill.clientName) {
+        clientMap.set(bill.clientName.toLowerCase(), bill.clientName);
+      }
+    });
+
+    // Pagination
+    const total = filtered.length;
+    const startIndex = (query.page - 1) * query.pageSize;
+    const paginated = filtered.slice(startIndex, startIndex + query.pageSize);
+
+    // Map to response format
+    const payments = paginated.map(bill => ({
+      id: bill.uid,
+      pcBillId: bill.uid,
+      paidDate: bill.paidDate ? bill.paidDate.toISOString() : null,
+      payeeName: bill.resourceName,
+      payeeId: bill.resourceUid,
+      amount: bill.total,
+      currency: bill.tenantCode === 'CA' ? 'CAD' as const : 'USD' as const,
+      status: 'paid' as const,
+      clientName: bill.clientName,
+      tenantCode: bill.tenantCode as 'US' | 'CA',
+      paymentMethod: bill.tenantCode === 'CA' ? 'Wise' : 'Bill.com',
+    }));
+
+    return {
+      payments,
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+      filters: {
+        payees: Array.from(payeeMap.entries()).map(([id, name]) => ({ id, name })),
+        clients: Array.from(clientMap.entries()).map(([id, name]) => ({ id, name })),
+      },
+    };
+  });
+
+  /**
+   * GET /api/payments/history/:id - Get payment details (lazy load)
+   */
+  fastify.get('/history/:id', {
+    schema: {
+      params: z.object({
+        id: z.string(),
+      }),
+      response: {
+        200: paymentDetailSchema,
+      },
+    },
+  }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const pcClient = getPartnerConnectClient();
+
+    try {
+      const bill = await pcClient.getBill(id);
+
+      // Build PC bill link (adjust URL as needed for your PartnerConnect instance)
+      const pcBillLink = `https://partnerconnect.fortiumpartners.com/bills/${id}`;
+
+      return {
+        id: bill.uid,
+        pcBillId: bill.uid,
+        paidDate: bill.paidDate ? bill.paidDate.toISOString() : null,
+        payeeName: bill.resourceName,
+        payeeId: bill.resourceUid,
+        amount: bill.total,
+        currency: bill.tenantCode === 'CA' ? 'CAD' as const : 'USD' as const,
+        status: 'paid' as const,
+        clientName: bill.clientName,
+        tenantCode: bill.tenantCode as 'US' | 'CA',
+        paymentMethod: bill.tenantCode === 'CA' ? 'Wise' : 'Bill.com',
+        invoiceNumber: bill.externalInvoiceDocNum || null,
+        billNumber: bill.externalBillDocNum || null,
+        referenceNumber: bill.externalBillId || null,
+        pcBillLink,
+        description: bill.description,
+      };
+    } catch (err) {
+      fastify.log.error(err, `Failed to fetch payment details for ${id}`);
+      return reply.status(404).send({
+        error: 'Payment not found',
+        message: `Could not find payment with ID: ${id}`,
+        statusCode: 404,
+      });
+    }
+  });
 
   /**
    * GET /api/payments/status - Get Bill.com configuration status

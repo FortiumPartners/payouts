@@ -9,9 +9,12 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "db:generate": "prisma generate",
-    "db:push": "prisma db push",
+    "db:push": "npm run db:backup-wise-recipients && prisma db push",
+    "db:push:force": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
+    "db:backup-wise-recipients": "tsx scripts/backup-wise-recipients.ts",
+    "db:restore-wise-recipients": "tsx scripts/restore-wise-recipients.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
