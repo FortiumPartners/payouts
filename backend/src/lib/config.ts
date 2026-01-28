@@ -7,11 +7,17 @@ const envSchema = z.object({
   DATABASE_URL: z.string(),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 
-  // Auth
-  GOOGLE_CLIENT_ID: z.string(),
-  GOOGLE_CLIENT_SECRET: z.string(),
-  GOOGLE_ALLOWED_DOMAIN: z.string().default('fortiumpartners.com'),
-  SESSION_SECRET: z.string(),
+  // Fortium Identity (OIDC)
+  IDENTITY_ISSUER: z.string().url().default('https://identity.fortiumsoftware.com'),
+  IDENTITY_CLIENT_ID: z.string().default('payouts'),
+  IDENTITY_CLIENT_SECRET: z.string(),
+  IDENTITY_CALLBACK_URL: z.string().url(),
+
+  // JWT (for Payouts sessions)
+  JWT_SECRET: z.string().min(32),
+  JWT_EXPIRES_IN: z.string().default('24h'),
+
+  // URLs
   BASE_URL: z.string().default('http://localhost:8000'),
   FRONTEND_URL: z.string().default('http://localhost:3007'),
 

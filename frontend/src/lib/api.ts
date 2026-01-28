@@ -2,7 +2,17 @@
  * API client for the Payouts backend.
  */
 
-const API_BASE = '/api';
+const API_URL = import.meta.env.VITE_API_URL || '';
+const API_BASE = `${API_URL}/api`;
+const AUTH_BASE = `${API_URL}/auth`;
+
+/**
+ * Get the full URL for an auth endpoint.
+ * Used for cross-origin auth when frontend and API are on different domains.
+ */
+export function getAuthUrl(path: string): string {
+  return `${AUTH_BASE}${path}`;
+}
 
 export interface ControlResult {
   name: string;
@@ -139,7 +149,8 @@ class ApiClient {
   async getCurrentUser(): Promise<User | null> {
     try {
       // Auth routes are at /auth, not /api/auth
-      const response = await fetch('/auth/me', { credentials: 'include' });
+      // Use AUTH_BASE for cross-origin support
+      const response = await fetch(`${AUTH_BASE}/me`, { credentials: 'include' });
       if (!response.ok) return null;
       return response.json();
     } catch {
@@ -215,7 +226,7 @@ class ApiClient {
   }
 
   logout(): void {
-    window.location.href = '/auth/logout';
+    window.location.href = `${AUTH_BASE}/logout`;
   }
 
   // Wise Recipients
