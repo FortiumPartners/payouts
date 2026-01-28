@@ -1,61 +1,54 @@
 /**
- * Session management using signed cookies.
- * Adapted from fpqbo pattern.
+ * Session management using JWT tokens in signed cookies.
+ * Adapted for Fortium Identity OIDC authentication.
  */
 
-import crypto from 'crypto';
+import { SignJWT, jwtVerify } from 'jose';
 import { config } from '../lib/config.js';
 
-const ALGORITHM = 'aes-256-gcm';
-const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
-
-/**
- * Create a signed session token for the given email.
- */
-export function createSessionToken(email: string): string {
-  const payload = JSON.stringify({
-    email,
-    exp: Date.now() + SESSION_MAX_AGE_MS,
-  });
-
-  // Derive key from secret
-  const key = crypto.scryptSync(config.SESSION_SECRET, 'salt', 32);
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-
-  let encrypted = cipher.update(payload, 'utf8', 'base64');
-  encrypted += cipher.final('base64');
-  const authTag = cipher.getAuthTag();
-
-  // Combine iv + authTag + encrypted
-  return Buffer.concat([iv, authTag, Buffer.from(encrypted, 'base64')]).toString('base64url');
+// Session payload stored in JWT
+export interface SessionPayload {
+  fortiumUserId: string;
+  email: string;
 }
 
 /**
- * Verify a session token and extract the email.
+ * Create a signed JWT session token for the given user.
+ */
+export async function createSessionToken(payload: SessionPayload): Promise<string> {
+  const secret = new TextEncoder().encode(config.JWT_SECRET);
+
+  return new SignJWT({
+    fortiumUserId: payload.fortiumUserId,
+    email: payload.email,
+  })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt()
+    .setExpirationTime(config.JWT_EXPIRES_IN)
+    .setIssuer('payouts')
+    .sign(secret);
+}
+
+/**
+ * Verify a session token and extract the payload.
  * Returns null if invalid or expired.
  */
-export function verifySessionToken(token: string): string | null {
+export async function verifySessionToken(token: string): Promise<SessionPayload | null> {
   try {
-    const data = Buffer.from(token, 'base64url');
-    const iv = data.subarray(0, 16);
-    const authTag = data.subarray(16, 32);
-    const encrypted = data.subarray(32);
+    const secret = new TextEncoder().encode(config.JWT_SECRET);
+    const { payload } = await jwtVerify(token, secret, {
+      issuer: 'payouts',
+    });
 
-    const key = crypto.scryptSync(config.SESSION_SECRET, 'salt', 32);
-    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
-    decipher.setAuthTag(authTag);
-
-    let decrypted = decipher.update(encrypted);
-    decrypted = Buffer.concat([decrypted, decipher.final()]);
-    const payload = JSON.parse(decrypted.toString('utf8'));
-
-    // Check expiration
-    if (payload.exp < Date.now()) {
+    // Ensure required fields are present
+    if (!payload.fortiumUserId || !payload.email) {
       return null;
     }
 
-    return payload.email;
+    return {
+      fortiumUserId: payload.fortiumUserId as string,
+      email: payload.email as string,
+    };
   } catch {
     return null;
   }

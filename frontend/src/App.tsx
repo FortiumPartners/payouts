@@ -8,7 +8,7 @@ import { BillsList, ViewModeToggle, ViewMode } from './components/BillsList';
 import { PaymentConfirmationModal } from './components/PaymentConfirmationModal';
 import { WiseRecipientsPage } from './components/WiseRecipientsPage';
 import { IntegrationStatusPanel } from './components/IntegrationStatus';
-import { Bill, api } from './lib/api';
+import { Bill, api, getAuthUrl } from './lib/api';
 import { useState } from 'react';
 
 function Dashboard() {
@@ -327,7 +327,7 @@ function Login() {
           Sign in with your Fortium Partners Google account.
         </p>
         <a
-          href="/auth/login"
+          href={getAuthUrl('/login')}
           className="block w-full text-center px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
         >
           Sign in with Google

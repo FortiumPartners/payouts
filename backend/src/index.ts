@@ -33,7 +33,7 @@ fastify.setSerializerCompiler(serializerCompiler);
 async function main() {
   // Cookies (for session)
   await fastify.register(cookie, {
-    secret: config.SESSION_SECRET,
+    secret: config.JWT_SECRET,
   });
 
   // CORS

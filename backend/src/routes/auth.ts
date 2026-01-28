@@ -1,189 +1,359 @@
 /**
- * Authentication routes for Google OAuth.
- * Follows fpqbo pattern: domain-restricted + allowlist.
+ * Authentication routes for Fortium Identity OIDC.
+ * Identity authenticates, Payouts authorizes (admin_users allowlist).
  */
 
 import { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
+import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { config } from '../lib/config.js';
-import { createSessionToken, verifySessionToken } from '../services/session.js';
+import { logger } from '../lib/logger.js';
+import { identityClient, type OIDCState, type FortiumClaims } from '../lib/identity-client.js';
+import { createSessionToken, verifySessionToken, type SessionPayload } from '../services/session.js';
 
-// Google OAuth endpoints
-const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
-const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
-const GOOGLE_USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo';
+// Cookie names
+const OIDC_STATE_COOKIE = 'oidc_state';
+const AUTH_TOKEN_COOKIE = 'auth_session';
+const ID_TOKEN_COOKIE = 'id_token';
+
+// Request schemas
+const callbackSchema = z.object({
+  code: z.string(),
+  state: z.string(),
+});
 
 export const authRoutes: FastifyPluginAsync = async (fastify) => {
   /**
-   * GET /auth/login - Initiate Google OAuth flow
+   * GET /auth/login
+   * Initiates OIDC login flow - redirects to Fortium Identity
    */
-  fastify.get('/login', async (request, reply) => {
-    const state = Math.random().toString(36).substring(2);
-
-    // Store state in cookie for CSRF protection
-    reply.setCookie('oauth_state', state, {
-      httpOnly: true,
-      secure: config.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 300, // 5 minutes
-      path: '/',
-    });
-
-    const params = new URLSearchParams({
-      client_id: config.GOOGLE_CLIENT_ID,
-      redirect_uri: `${config.BASE_URL}/auth/callback`,
-      response_type: 'code',
-      scope: 'openid email profile',
-      state,
-      access_type: 'online',
-      prompt: 'select_account',
-    });
-
-    return reply.redirect(`${GOOGLE_AUTH_URL}?${params}`);
-  });
-
-  /**
-   * GET /auth/callback - Handle OAuth callback from Google
-   */
-  fastify.get('/callback', async (request: FastifyRequest<{
-    Querystring: { code?: string; state?: string; error?: string };
-  }>, reply) => {
-    const { code, state, error } = request.query;
-
-    // Handle OAuth errors
-    if (error) {
-      fastify.log.error(`OAuth error: ${error}`);
-      return reply.redirect(`${config.FRONTEND_URL}/login?error=oauth_failed`);
-    }
-
-    // Validate state (CSRF protection)
-    const storedState = request.cookies.oauth_state;
-    if (!state || state !== storedState) {
-      fastify.log.warn('OAuth state mismatch');
-      return reply.redirect(`${config.FRONTEND_URL}/login?error=invalid_state`);
-    }
-
-    // Clear state cookie
-    reply.clearCookie('oauth_state', { path: '/' });
-
-    if (!code) {
-      return reply.redirect(`${config.FRONTEND_URL}/login?error=no_code`);
-    }
-
+  fastify.get('/login', async (_request, reply) => {
     try {
-      // Exchange code for tokens
-      const tokenResponse = await fetch(GOOGLE_TOKEN_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          code,
-          client_id: config.GOOGLE_CLIENT_ID,
-          client_secret: config.GOOGLE_CLIENT_SECRET,
-          redirect_uri: `${config.BASE_URL}/auth/callback`,
-          grant_type: 'authorization_code',
-        }),
-      });
+      const { url, state } = await identityClient.generateAuthorizationUrl(
+        config.IDENTITY_CALLBACK_URL
+      );
 
-      if (!tokenResponse.ok) {
-        const errorData = await tokenResponse.text();
-        fastify.log.error(`Token exchange failed: ${errorData}`);
-        return reply.redirect(`${config.FRONTEND_URL}/login?error=token_failed`);
-      }
-
-      const tokens = await tokenResponse.json() as { access_token: string };
-
-      // Get user info
-      const userResponse = await fetch(GOOGLE_USERINFO_URL, {
-        headers: { Authorization: `Bearer ${tokens.access_token}` },
-      });
-
-      if (!userResponse.ok) {
-        return reply.redirect(`${config.FRONTEND_URL}/login?error=userinfo_failed`);
-      }
-
-      const userInfo = await userResponse.json() as { email: string; name?: string };
-      const email = userInfo.email;
-
-      fastify.log.info(`OAuth callback for email: ${email}`);
-
-      // Validate domain
-      const domain = email.split('@')[1];
-      if (domain !== config.GOOGLE_ALLOWED_DOMAIN) {
-        fastify.log.warn(`Domain validation failed for ${email}`);
-        return reply.redirect(`${config.FRONTEND_URL}/login?error=invalid_domain`);
-      }
-
-      // Check allowlist (admin_users table)
-      const adminUser = await prisma.adminUser.findUnique({
-        where: { email },
-      });
-
-      if (!adminUser) {
-        fastify.log.warn(`Allowlist validation failed for ${email}`);
-        return reply.redirect(`${config.FRONTEND_URL}/login?error=not_authorized`);
-      }
-
-      // Update last login
-      await prisma.adminUser.update({
-        where: { email },
-        data: { lastLoginAt: new Date() },
-      });
-
-      // Create session cookie
-      const sessionToken = createSessionToken(email);
-
-      reply.setCookie('auth_session', sessionToken, {
+      // Store OIDC state in signed cookie
+      reply.setCookie(OIDC_STATE_COOKIE, JSON.stringify(state), {
         httpOnly: true,
         secure: config.NODE_ENV === 'production',
         sameSite: 'lax',
-        maxAge: 24 * 60 * 60, // 24 hours
+        maxAge: 600, // 10 minutes
         path: '/',
+        signed: true,
       });
 
-      fastify.log.info(`Session created for ${email}`);
-      return reply.redirect(`${config.FRONTEND_URL}/`);
-
-    } catch (err) {
-      fastify.log.error(err, 'OAuth callback error');
-      return reply.redirect(`${config.FRONTEND_URL}/login?error=auth_failed`);
+      logger.info('Redirecting to Identity for authentication');
+      reply.redirect(url);
+    } catch (error) {
+      logger.error({ error }, 'Failed to generate authorization URL');
+      reply.redirect(`${config.FRONTEND_URL}/login?error=auth_init_failed`);
     }
   });
 
   /**
-   * GET /auth/logout - Clear session and redirect to login
+   * GET /auth/callback
+   * Handles OIDC callback from Fortium Identity
    */
-  fastify.get('/logout', async (request, reply) => {
-    reply.clearCookie('auth_session', { path: '/' });
-    return reply.redirect(`${config.FRONTEND_URL}/login`);
+  fastify.get('/callback', async (request, reply) => {
+    try {
+      const { code, state } = callbackSchema.parse(request.query);
+
+      // Retrieve and validate OIDC state from cookie
+      const stateCookie = request.cookies[OIDC_STATE_COOKIE];
+      if (!stateCookie) {
+        logger.warn('Missing OIDC state cookie');
+        return reply.redirect(`${config.FRONTEND_URL}/login?error=state_missing`);
+      }
+
+      // Unsign the cookie
+      const unsigned = request.unsignCookie(stateCookie);
+      if (!unsigned.valid || !unsigned.value) {
+        logger.warn('Invalid OIDC state cookie signature');
+        return reply.redirect(`${config.FRONTEND_URL}/login?error=state_invalid`);
+      }
+
+      const oidcState: OIDCState = JSON.parse(unsigned.value);
+
+      // Validate state parameter
+      if (state !== oidcState.state) {
+        logger.warn('OIDC state mismatch');
+        return reply.redirect(`${config.FRONTEND_URL}/login?error=state_mismatch`);
+      }
+
+      // Clear the state cookie
+      reply.clearCookie(OIDC_STATE_COOKIE, { path: '/' });
+
+      // Exchange code for tokens
+      const { idToken, claims } = await identityClient.exchangeCode(code, oidcState);
+
+      logger.info(
+        { fortiumUserId: claims.fortium_user_id, email: claims.email },
+        'OIDC authentication successful'
+      );
+
+      // AUTHORIZATION: Check admin_users allowlist
+      // Identity authenticates, Payouts authorizes
+      const adminUser = await prisma.adminUser.findUnique({
+        where: { email: claims.email },
+      });
+
+      if (!adminUser) {
+        logger.warn({ email: claims.email }, 'User not in admin_users allowlist');
+        return reply.redirect(`${config.FRONTEND_URL}/login?error=not_authorized`);
+      }
+
+      // Update last login timestamp
+      await prisma.adminUser.update({
+        where: { email: claims.email },
+        data: { lastLoginAt: new Date() },
+      });
+
+      // Create Payouts session JWT
+      const sessionToken = await createSessionToken({
+        fortiumUserId: claims.fortium_user_id,
+        email: claims.email,
+      });
+
+      // Set auth cookies
+      reply.setCookie(AUTH_TOKEN_COOKIE, sessionToken, {
+        httpOnly: true,
+        secure: config.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 86400, // 24 hours
+        path: '/',
+        signed: true,
+      });
+
+      // Store ID token for potential logout
+      reply.setCookie(ID_TOKEN_COOKIE, idToken, {
+        httpOnly: true,
+        secure: config.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 86400,
+        path: '/',
+        signed: true,
+      });
+
+      // Redirect to frontend dashboard
+      logger.info({ email: claims.email }, 'Session created for user');
+      reply.redirect(`${config.FRONTEND_URL}/`);
+    } catch (error) {
+      const err = error as Error;
+      logger.error({
+        message: err.message,
+        name: err.name,
+        stack: err.stack,
+      }, 'OIDC callback error');
+
+      if (error instanceof z.ZodError) {
+        return reply.redirect(`${config.FRONTEND_URL}/login?error=invalid_callback`);
+      }
+
+      reply.redirect(`${config.FRONTEND_URL}/login?error=callback_failed`);
+    }
   });
 
   /**
-   * GET /auth/me - Get current user info
+   * GET /auth/me
+   * Returns current authenticated user
+   * Response shape: { user: { id, email, lastLoginAt } }
    */
   fastify.get('/me', async (request, reply) => {
-    const token = request.cookies.auth_session;
+    const tokenCookie = request.cookies[AUTH_TOKEN_COOKIE];
 
-    if (!token) {
+    if (!tokenCookie) {
       return reply.status(401).send({ error: 'Not authenticated' });
     }
 
-    const email = verifySessionToken(token);
-    if (!email) {
-      reply.clearCookie('auth_session', { path: '/' });
+    // Unsign the cookie
+    const unsigned = request.unsignCookie(tokenCookie);
+    if (!unsigned.valid || !unsigned.value) {
+      reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/' });
       return reply.status(401).send({ error: 'Session expired' });
     }
 
+    const session = await verifySessionToken(unsigned.value);
+    if (!session) {
+      reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/' });
+      return reply.status(401).send({ error: 'Session expired' });
+    }
+
+    // Fetch user from database to get full details
     const user = await prisma.adminUser.findUnique({
-      where: { email },
+      where: { email: session.email },
       select: { id: true, email: true, lastLoginAt: true },
     });
 
     if (!user) {
-      reply.clearCookie('auth_session', { path: '/' });
+      reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/' });
       return reply.status(401).send({ error: 'User not found' });
     }
 
     return { user };
+  });
+
+  /**
+   * POST /auth/test-login
+   * Test login for E2E testing, Playwright, Claude automation
+   *
+   * SECURITY: 5-layer protection:
+   * - Layer 1: Never available in production
+   * - Layer 2: Must be explicitly enabled via env var
+   * - Layer 3: Requires secret API key
+   * - Layer 4: Only allows test email domains
+   * - Layer 5: Audit logged
+   */
+  fastify.post('/test-login', async (request, reply) => {
+    // Layer 1: Never in production
+    if (process.env.NODE_ENV === 'production') {
+      return reply.status(404).send({ error: 'Not found' });
+    }
+
+    // Layer 2: Must be explicitly enabled
+    if (process.env.ENABLE_TEST_AUTH !== 'true') {
+      return reply.status(404).send({ error: 'Not found' });
+    }
+
+    // Layer 3: Require test API key
+    const testKey = request.headers['x-test-key'];
+    if (!process.env.TEST_AUTH_KEY || testKey !== process.env.TEST_AUTH_KEY) {
+      logger.warn('Test login attempted with invalid or missing X-Test-Key');
+      return reply.status(401).send({ error: 'Invalid test key' });
+    }
+
+    const body = request.body as {
+      email?: string;
+      fortiumUserId?: string;
+    };
+
+    if (!body.email) {
+      return reply.status(400).send({ error: 'Email is required' });
+    }
+
+    // Layer 4: Only allow test email domains
+    const allowedTestDomains = [
+      'test.fortium.local',
+      'test.example.com',
+      'playwright.test',
+      'e2e.test',
+    ];
+
+    const emailDomain = body.email.split('@')[1]?.toLowerCase();
+    if (!emailDomain || !allowedTestDomains.includes(emailDomain)) {
+      return reply.status(400).send({
+        error: 'Email domain not allowed for test login',
+        allowedDomains: allowedTestDomains,
+      });
+    }
+
+    try {
+      const email = body.email.toLowerCase();
+      const fortiumUserId = body.fortiumUserId || `test-${Date.now()}`;
+
+      // Create or update admin user for test
+      const adminUser = await prisma.adminUser.upsert({
+        where: { email },
+        create: {
+          email,
+          lastLoginAt: new Date(),
+        },
+        update: {
+          lastLoginAt: new Date(),
+        },
+      });
+
+      // Create Payouts session JWT (same as normal auth flow)
+      const sessionToken = await createSessionToken({
+        fortiumUserId,
+        email,
+      });
+
+      // Set auth cookie (same as normal auth flow)
+      reply.setCookie(AUTH_TOKEN_COOKIE, sessionToken, {
+        httpOnly: true,
+        secure: config.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 86400, // 24 hours
+        path: '/',
+        signed: true,
+      });
+
+      // Layer 5: Audit log
+      logger.info(
+        { fortiumUserId, email, testLogin: true },
+        'TEST LOGIN: Session established via test endpoint'
+      );
+
+      return reply.send({
+        success: true,
+        user: {
+          id: adminUser.id,
+          email: adminUser.email,
+          lastLoginAt: adminUser.lastLoginAt,
+        },
+        message: 'Test login successful. Session cookie has been set.',
+      });
+    } catch (error) {
+      logger.error({ error, email: body.email }, 'Test login error');
+      return reply.status(500).send({ error: 'Test login failed' });
+    }
+  });
+
+  /**
+   * GET /auth/logout
+   * Clears session and redirects to login (or Identity logout)
+   */
+  fastify.get('/logout', async (request, reply) => {
+    // Get ID token for logout hint
+    const idTokenCookie = request.cookies[ID_TOKEN_COOKIE];
+    let idToken: string | undefined;
+    if (idTokenCookie) {
+      const unsigned = request.unsignCookie(idTokenCookie);
+      if (unsigned.valid && unsigned.value) {
+        idToken = unsigned.value;
+      }
+    }
+
+    // Clear all auth cookies
+    reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/' });
+    reply.clearCookie(ID_TOKEN_COOKIE, { path: '/' });
+
+    logger.info('User logged out');
+
+    // Redirect to Identity logout for full SSO logout
+    const logoutUrl = identityClient.getLogoutUrl(idToken, config.FRONTEND_URL);
+    return reply.redirect(logoutUrl);
+  });
+
+  /**
+   * POST /auth/logout
+   * API logout endpoint - returns logout URL for frontend to handle
+   */
+  fastify.post('/logout', async (request, reply) => {
+    // Get ID token for logout hint
+    const idTokenCookie = request.cookies[ID_TOKEN_COOKIE];
+    let idToken: string | undefined;
+    if (idTokenCookie) {
+      const unsigned = request.unsignCookie(idTokenCookie);
+      if (unsigned.valid && unsigned.value) {
+        idToken = unsigned.value;
+      }
+    }
+
+    // Clear all auth cookies
+    reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/' });
+    reply.clearCookie(ID_TOKEN_COOKIE, { path: '/' });
+
+    logger.info('User logged out');
+
+    // Return logout URL for frontend to redirect to Identity logout if desired
+    const logoutUrl = identityClient.getLogoutUrl(idToken, config.FRONTEND_URL);
+
+    reply.send({
+      success: true,
+      logoutUrl, // Frontend can redirect here for full SSO logout
+    });
   });
 };
 
@@ -194,18 +364,26 @@ export async function requireAuth(
   request: FastifyRequest,
   reply: FastifyReply
 ): Promise<void> {
-  const token = request.cookies.auth_session;
+  const tokenCookie = request.cookies[AUTH_TOKEN_COOKIE];
 
-  if (!token) {
+  if (!tokenCookie) {
     return reply.status(401).send({ error: 'Not authenticated' });
   }
 
-  const email = verifySessionToken(token);
-  if (!email) {
-    reply.clearCookie('auth_session', { path: '/' });
+  // Unsign the cookie
+  const unsigned = request.unsignCookie(tokenCookie);
+  if (!unsigned.valid || !unsigned.value) {
+    reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/' });
     return reply.status(401).send({ error: 'Session expired' });
   }
 
-  // Add email to request for downstream use
-  (request as any).userEmail = email;
+  const session = await verifySessionToken(unsigned.value);
+  if (!session) {
+    reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/' });
+    return reply.status(401).send({ error: 'Session expired' });
+  }
+
+  // Add session to request for downstream use
+  (request as any).userEmail = session.email;
+  (request as any).fortiumUserId = session.fortiumUserId;
 }
