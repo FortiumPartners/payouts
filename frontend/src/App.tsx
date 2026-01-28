@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate, Link } from 'react-router-dom';
-import { DollarSign, RefreshCw, LogOut, Loader2, AlertCircle, CheckCircle, Settings } from 'lucide-react';
+import { DollarSign, RefreshCw, LogOut, Loader2, AlertCircle, CheckCircle, Settings, History } from 'lucide-react';
+import { PaymentHistoryPage } from './pages/PaymentHistoryPage';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { useBills } from './hooks/useBills';
 import { useBillControls } from './hooks/useBillControls';
@@ -116,6 +117,14 @@ function Dashboard() {
             {user && (
               <span className="text-sm text-muted-foreground">{user.email}</span>
             )}
+            <Link
+              to="/payment-history"
+              className="flex items-center gap-2 px-4 py-2 rounded-md border hover:bg-muted"
+              title="View Payment History"
+            >
+              <History className="h-4 w-4" />
+              Payment History
+            </Link>
             <Link
               to="/wise-recipients"
               className="flex items-center gap-2 px-4 py-2 rounded-md border hover:bg-muted"
@@ -364,6 +373,14 @@ function App() {
           element={
             <ProtectedRoute>
               <WiseRecipientsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/payment-history"
+          element={
+            <ProtectedRoute>
+              <PaymentHistoryPage />
             </ProtectedRoute>
           }
         />

@@ -51,6 +51,39 @@ export interface WiseRecipient {
   updatedAt: string;
 }
 
+export interface PaymentHistoryItem {
+  id: string;
+  pcBillId: string;
+  paidDate: string | null;
+  payeeName: string;
+  payeeId: string;
+  amount: number;
+  currency: 'USD' | 'CAD';
+  status: 'paid' | 'pending' | 'failed';
+  clientName: string;
+  tenantCode: 'US' | 'CA';
+  paymentMethod: string;
+}
+
+export interface PaymentDetail extends PaymentHistoryItem {
+  invoiceNumber: string | null;
+  billNumber: string | null;
+  referenceNumber: string | null;
+  pcBillLink: string | null;
+  description: string;
+}
+
+export interface PaymentHistoryResponse {
+  payments: PaymentHistoryItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  filters: {
+    payees: { id: string; name: string }[];
+    clients: { id: string; name: string }[];
+  };
+}
+
 export interface WiseAccount {
   id: number;
   name: string;
@@ -230,6 +263,40 @@ class ApiClient {
       method: 'DELETE',
       credentials: 'include',
     });
+  }
+
+  async getPaymentHistory(params?: {
+    startDate?: string;
+    endDate?: string;
+    payeeIds?: string;
+    clientIds?: string;
+    tenant?: 'US' | 'CA' | 'all';
+    paymentMethod?: string;
+    minAmount?: number;
+    maxAmount?: number;
+    status?: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<PaymentHistoryResponse> {
+    const searchParams = new URLSearchParams();
+    if (params?.startDate) searchParams.set('startDate', params.startDate);
+    if (params?.endDate) searchParams.set('endDate', params.endDate);
+    if (params?.payeeIds) searchParams.set('payeeIds', params.payeeIds);
+    if (params?.clientIds) searchParams.set('clientIds', params.clientIds);
+    if (params?.tenant) searchParams.set('tenant', params.tenant);
+    if (params?.paymentMethod) searchParams.set('paymentMethod', params.paymentMethod);
+    if (params?.minAmount !== undefined) searchParams.set('minAmount', String(params.minAmount));
+    if (params?.maxAmount !== undefined) searchParams.set('maxAmount', String(params.maxAmount));
+    if (params?.status) searchParams.set('status', params.status);
+    if (params?.page) searchParams.set('page', String(params.page));
+    if (params?.pageSize) searchParams.set('pageSize', String(params.pageSize));
+
+    const query = searchParams.toString();
+    return this.request<PaymentHistoryResponse>(`/payments/history${query ? `?${query}` : ''}`);
+  }
+
+  async getPaymentDetail(id: string): Promise<PaymentDetail> {
+    return this.request<PaymentDetail>(`/payments/history/${id}`);
   }
 }
 
