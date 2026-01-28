@@ -345,11 +345,24 @@ function Login() {
 
           {/* Error message */}
           {error && (
-            <div className="mb-6 p-4 rounded-lg bg-red-50 border border-red-100 flex items-start gap-3">
-              <AlertCircle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
-              <p className="text-sm text-red-700">
-                {errorMessages[error] || 'An error occurred. Please try again.'}
-              </p>
+            <div className="mb-6 p-4 rounded-lg bg-red-50 border border-red-100">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
+                <p className="text-sm text-red-700">
+                  {errorMessages[error] || 'An error occurred. Please try again.'}
+                </p>
+              </div>
+              {error === 'not_authorized' && (
+                <a
+                  href={`https://identity.fortiumsoftware.com/auth/switch-account?return_to=${encodeURIComponent(window.location.origin + '/login')}`}
+                  className="mt-3 flex items-center justify-center gap-2 w-full px-3 py-2 text-sm text-red-700 hover:text-red-800 hover:bg-red-100 rounded-md transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                  </svg>
+                  Use a Different Google Account
+                </a>
+              )}
             </div>
           )}
 
