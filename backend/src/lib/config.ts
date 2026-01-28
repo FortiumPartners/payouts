@@ -8,7 +8,7 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 
   // Fortium Identity (OIDC)
-  IDENTITY_ISSUER: z.string().url().default('https://identity.fortiumsoftware.com'),
+  IDENTITY_ISSUER: z.string().url().default('https://identity.fortiumsoftware.com/oidc'),
   IDENTITY_CLIENT_ID: z.string().default('payouts'),
   IDENTITY_CLIENT_SECRET: z.string(),
   IDENTITY_CALLBACK_URL: z.string().url(),
