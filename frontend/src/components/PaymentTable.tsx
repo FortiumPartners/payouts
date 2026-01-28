@@ -9,7 +9,6 @@ import { Column } from 'primereact/column';
 import { Skeleton } from 'primereact/skeleton';
 import { Message } from 'primereact/message';
 import { Button } from 'primereact/button';
-import { Tag } from 'primereact/tag';
 import { api, PaymentHistoryItem, PaymentDetail } from '../lib/api';
 import { PaymentDetailPanel } from './PaymentDetail';
 import { PaymentFilterValues, FilterOption } from './PaymentFilters';
@@ -125,11 +124,6 @@ export function PaymentTable({ filters, onFiltersLoaded }: PaymentTableProps) {
     }
   };
 
-  const statusTemplate = (rowData: PaymentHistoryItem) => {
-    const severity = rowData.status === 'paid' ? 'success' : rowData.status === 'pending' ? 'warning' : 'danger';
-    return <Tag value={rowData.status.charAt(0).toUpperCase() + rowData.status.slice(1)} severity={severity} />;
-  };
-
   const amountTemplate = (rowData: PaymentHistoryItem) => {
     return formatCurrency(rowData.amount, rowData.currency);
   };
@@ -195,8 +189,10 @@ export function PaymentTable({ filters, onFiltersLoaded }: PaymentTableProps) {
         <Column expander style={{ width: '3rem' }} />
         <Column field="paidDate" header="Date" body={dateTemplate} sortable style={{ width: '10rem' }} />
         <Column field="payeeName" header="Payee" sortable />
+        <Column field="clientName" header="Client" sortable />
+        <Column field="tenantCode" header="Tenant" sortable style={{ width: '6rem' }} />
+        <Column field="paymentMethod" header="Method" sortable style={{ width: '8rem' }} />
         <Column field="amount" header="Amount" body={amountTemplate} sortable style={{ width: '10rem' }} />
-        <Column field="status" header="Status" body={statusTemplate} style={{ width: '8rem' }} />
       </DataTable>
     </div>
   );
