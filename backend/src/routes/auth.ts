@@ -115,11 +115,11 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         email: claims.email,
       });
 
-      // Set auth cookies
+      // Set auth cookies (sameSite: 'none' required for cross-origin requests)
       reply.setCookie(AUTH_TOKEN_COOKIE, sessionToken, {
         httpOnly: true,
-        secure: config.NODE_ENV === 'production',
-        sameSite: 'lax',
+        secure: true, // Required when sameSite is 'none'
+        sameSite: 'none',
         maxAge: 86400, // 24 hours
         path: '/',
         signed: true,
@@ -128,8 +128,8 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       // Store ID token for potential logout
       reply.setCookie(ID_TOKEN_COOKIE, idToken, {
         httpOnly: true,
-        secure: config.NODE_ENV === 'production',
-        sameSite: 'lax',
+        secure: true,
+        sameSite: 'none',
         maxAge: 86400,
         path: '/',
         signed: true,
@@ -269,11 +269,11 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         email,
       });
 
-      // Set auth cookie (same as normal auth flow)
+      // Set auth cookie (same as normal auth flow, cross-origin compatible)
       reply.setCookie(AUTH_TOKEN_COOKIE, sessionToken, {
         httpOnly: true,
-        secure: config.NODE_ENV === 'production',
-        sameSite: 'lax',
+        secure: true,
+        sameSite: 'none',
         maxAge: 86400, // 24 hours
         path: '/',
         signed: true,
