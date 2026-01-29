@@ -9,7 +9,7 @@
  * - General: Proving period elapsed, Amount valid
  */
 
-import { getFpqboClient } from './fpqbo.js';
+import { getFpqboClient, FpqboError } from './fpqbo.js';
 import { getBillComClient } from './billcom.js';
 import { getWiseClient } from './wise.js';
 import { PCBill } from './partnerconnect.js';
@@ -93,13 +93,23 @@ export async function runControlChecks(
       });
     }
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    controls.push({
-      name: 'invoiceExistsInQbo',
-      passed: false,
-      reason: `Invoice not found: ${errMsg}`,
-      checkedAt: new Date(),
-    });
+    // Handle "not found" gracefully - invoice was deleted/made inactive in QBO
+    if (err instanceof FpqboError && err.isNotFound) {
+      controls.push({
+        name: 'invoiceExistsInQbo',
+        passed: false,
+        reason: `QBO invoice ${bill.externalInvoiceDocNum} deleted or inactive`,
+        checkedAt: new Date(),
+      });
+    } else {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      controls.push({
+        name: 'invoiceExistsInQbo',
+        passed: false,
+        reason: `Invoice lookup failed: ${errMsg}`,
+        checkedAt: new Date(),
+      });
+    }
   }
 
   // Control: Invoice Paid in QBO
@@ -168,13 +178,23 @@ export async function runControlChecks(
       });
     }
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    controls.push({
-      name: 'billExistsInQbo',
-      passed: false,
-      reason: `Unable to verify QBO bill: ${errMsg}`,
-      checkedAt: new Date(),
-    });
+    // Handle "not found" gracefully - bill was deleted/made inactive in QBO
+    if (err instanceof FpqboError && err.isNotFound) {
+      controls.push({
+        name: 'billExistsInQbo',
+        passed: false,
+        reason: `QBO bill ${bill.externalBillId} deleted or inactive`,
+        checkedAt: new Date(),
+      });
+    } else {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      controls.push({
+        name: 'billExistsInQbo',
+        passed: false,
+        reason: `Unable to verify QBO bill: ${errMsg}`,
+        checkedAt: new Date(),
+      });
+    }
   }
 
   // =========================================================================

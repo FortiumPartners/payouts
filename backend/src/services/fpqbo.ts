@@ -7,10 +7,20 @@ import { config } from '../lib/config.js';
 
 // Error types
 export class FpqboError extends Error {
-  constructor(message: string, public statusCode?: number) {
+  constructor(message: string, public statusCode?: number, public isNotFound: boolean = false) {
     super(message);
     this.name = 'FpqboError';
   }
+}
+
+// Check if error indicates object not found (deleted/inactive in QBO)
+function isNotFoundError(statusCode: number, errorData: Record<string, unknown>): boolean {
+  const detail = String(errorData.detail || errorData.message || errorData.error || '');
+  return (
+    statusCode === 404 ||
+    (statusCode === 500 && detail.includes('Object Not Found')) ||
+    detail.includes('610:') // QBO error code for not found
+  );
 }
 
 // Types
@@ -88,16 +98,30 @@ export class FpqboClient {
         body: body ? JSON.stringify(body) : undefined,
       });
 
-      console.log(`[fpqbo] Response status: ${response.status}`);
-
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({})) as { message?: string; error?: string };
+        const errorData = await response.json().catch(() => ({})) as Record<string, unknown>;
+
+        // Check if this is a "not found" case (deleted/inactive in QBO)
+        if (isNotFoundError(response.status, errorData)) {
+          // This is a normal business case - log at info level, not error
+          console.log(`[fpqbo] Object not found (deleted/inactive in QBO)`);
+          throw new FpqboError(
+            'Object not found in QBO',
+            response.status,
+            true // isNotFound flag
+          );
+        }
+
+        // Actual error - log details
+        console.log(`[fpqbo] Response status: ${response.status}`);
         console.log(`[fpqbo] Error response:`, errorData);
         throw new FpqboError(
-          errorData.message || errorData.error || `API error ${response.status}`,
+          String(errorData.message || errorData.error || errorData.detail || `API error ${response.status}`),
           response.status
         );
       }
+
+      console.log(`[fpqbo] Response status: ${response.status}`);
 
       return await response.json() as T;
     } catch (err) {
