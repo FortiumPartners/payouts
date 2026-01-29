@@ -169,13 +169,13 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     // Unsign the cookie
     const unsigned = request.unsignCookie(tokenCookie);
     if (!unsigned.valid || !unsigned.value) {
-      reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/' });
+      reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/', sameSite: 'none', secure: true });
       return reply.status(401).send({ error: 'Session expired' });
     }
 
     const session = await verifySessionToken(unsigned.value);
     if (!session) {
-      reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/' });
+      reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/', sameSite: 'none', secure: true });
       return reply.status(401).send({ error: 'Session expired' });
     }
 
@@ -186,7 +186,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     });
 
     if (!user) {
-      reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/' });
+      reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/', sameSite: 'none', secure: true });
       return reply.status(401).send({ error: 'User not found' });
     }
 
@@ -315,9 +315,9 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
-    // Clear all auth cookies
-    reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/' });
-    reply.clearCookie(ID_TOKEN_COOKIE, { path: '/' });
+    // Clear all auth cookies (must match sameSite/secure options used when setting)
+    reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/', sameSite: 'none', secure: true });
+    reply.clearCookie(ID_TOKEN_COOKIE, { path: '/', sameSite: 'none', secure: true });
 
     logger.info('User logged out');
 
@@ -341,9 +341,9 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
-    // Clear all auth cookies
-    reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/' });
-    reply.clearCookie(ID_TOKEN_COOKIE, { path: '/' });
+    // Clear all auth cookies (must match sameSite/secure options used when setting)
+    reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/', sameSite: 'none', secure: true });
+    reply.clearCookie(ID_TOKEN_COOKIE, { path: '/', sameSite: 'none', secure: true });
 
     logger.info('User logged out');
 
@@ -373,13 +373,13 @@ export async function requireAuth(
   // Unsign the cookie
   const unsigned = request.unsignCookie(tokenCookie);
   if (!unsigned.valid || !unsigned.value) {
-    reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/' });
+    reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/', sameSite: 'none', secure: true });
     return reply.status(401).send({ error: 'Session expired' });
   }
 
   const session = await verifySessionToken(unsigned.value);
   if (!session) {
-    reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/' });
+    reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/', sameSite: 'none', secure: true });
     return reply.status(401).send({ error: 'Session expired' });
   }
 
