@@ -14,7 +14,7 @@ services:
       - PORT=8000
       - HOST=0.0.0.0
       - LOG_LEVEL=debug
-      - DATABASE_URL=postgresql://fortium_render_production_postgres_user:qUoIQ7rLsDBEDEu7kZwfKHyuIXIXyCXC@dpg-d5dcfmqli9vc73dfrfvg-a.oregon-postgres.render.com/payouts?connection_limit=5&pool_timeout=20&connect_timeout=10
+      - DATABASE_URL=${DATABASE_URL:-postgresql://payouts:payouts@localhost:5432/payouts}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-placeholder}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-placeholder}
       - SESSION_SECRET=${SESSION_SECRET:-dev-session-secret}
