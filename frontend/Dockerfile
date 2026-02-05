@@ -12,17 +12,17 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-# Production - serve with nginx
-FROM nginx:alpine AS runner
-COPY --from=builder /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
-
-# Development
+# Development (use --target=dev for local)
 FROM base AS dev
 COPY package*.json ./
 RUN npm install
 COPY . .
 EXPOSE 3000
 CMD ["npm", "run", "dev"]
+
+# Production - serve with nginx (default target)
+FROM nginx:alpine AS runner
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
