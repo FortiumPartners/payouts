@@ -43,22 +43,15 @@ services:
       - key: BILLCOM_API_KEY
         sync: false
 
-  # Frontend static site
+  # Frontend web service (nginx reverse proxy for same-origin cookies)
   - type: web
     name: payouts-frontend
-    runtime: static
-    buildCommand: cd frontend && npm install && npm run build
-    staticPublishPath: ./frontend/dist
+    runtime: docker
+    dockerfilePath: ./frontend/Dockerfile
+    dockerContext: ./frontend
     repo: https://github.com/FortiumPartners/payouts
     branch: main
-    headers:
-      - path: /*
-        name: Cache-Control
-        value: no-cache
-    routes:
-      - type: rewrite
-        source: /*
-        destination: /index.html
+    healthCheckPath: /
     envVars:
       - key: VITE_API_URL
-        sync: false  # Set to https://payouts-api.onrender.com
+        value: ""  # Empty - same-origin, nginx proxies /api and /auth
