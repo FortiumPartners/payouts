@@ -15,6 +15,7 @@ import { createSessionToken, verifySessionToken, type SessionPayload } from '../
 const OIDC_STATE_COOKIE = 'oidc_state';
 const AUTH_TOKEN_COOKIE = 'auth_session';
 const ID_TOKEN_COOKIE = 'id_token';
+const REFRESH_TOKEN_COOKIE = 'refresh_token';
 
 // Request schemas
 const callbackSchema = z.object({
@@ -85,7 +86,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       reply.clearCookie(OIDC_STATE_COOKIE, { path: '/' });
 
       // Exchange code for tokens
-      const { idToken, claims } = await identityClient.exchangeCode(code, oidcState);
+      const { idToken, refreshToken, claims } = await identityClient.exchangeCode(code, oidcState);
 
       logger.info(
         { fortiumUserId: claims.fortium_user_id, email: claims.email },
@@ -134,6 +135,18 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         path: '/',
         signed: true,
       });
+
+      // Store refresh token (7-day TTL)
+      if (refreshToken) {
+        reply.setCookie(REFRESH_TOKEN_COOKIE, refreshToken, {
+          httpOnly: true,
+          secure: config.NODE_ENV === 'production',
+          sameSite: 'lax',
+          maxAge: 7 * 24 * 60 * 60, // 7 days
+          path: '/',
+          signed: true,
+        });
+      }
 
       // Redirect to frontend dashboard
       logger.info({ email: claims.email }, 'Session created for user');
@@ -301,6 +314,72 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   /**
+   * POST /auth/refresh
+   * Exchange refresh token for new tokens
+   */
+  fastify.post('/refresh', async (request, reply) => {
+    const refreshCookie = request.cookies[REFRESH_TOKEN_COOKIE];
+    if (!refreshCookie) {
+      return reply.status(401).send({ error: 'No refresh token' });
+    }
+
+    const unsigned = request.unsignCookie(refreshCookie);
+    if (!unsigned.valid || !unsigned.value) {
+      reply.clearCookie(REFRESH_TOKEN_COOKIE, { path: '/', sameSite: 'lax', secure: config.NODE_ENV === 'production' });
+      return reply.status(401).send({ error: 'Invalid refresh token' });
+    }
+
+    try {
+      const tokens = await identityClient.refreshToken(unsigned.value);
+
+      // Create new session
+      const sessionToken = await createSessionToken({
+        fortiumUserId: (request as any).fortiumUserId || 'unknown',
+        email: (request as any).userEmail || 'unknown',
+      });
+
+      reply.setCookie(AUTH_TOKEN_COOKIE, sessionToken, {
+        httpOnly: true,
+        secure: config.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 86400,
+        path: '/',
+        signed: true,
+      });
+
+      if (tokens.idToken) {
+        reply.setCookie(ID_TOKEN_COOKIE, tokens.idToken, {
+          httpOnly: true,
+          secure: config.NODE_ENV === 'production',
+          sameSite: 'lax',
+          maxAge: 86400,
+          path: '/',
+          signed: true,
+        });
+      }
+
+      if (tokens.refreshToken) {
+        reply.setCookie(REFRESH_TOKEN_COOKIE, tokens.refreshToken, {
+          httpOnly: true,
+          secure: config.NODE_ENV === 'production',
+          sameSite: 'lax',
+          maxAge: 7 * 24 * 60 * 60,
+          path: '/',
+          signed: true,
+        });
+      }
+
+      reply.send({ success: true });
+    } catch (error) {
+      logger.error({ error }, 'Token refresh failed');
+      reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/', sameSite: 'lax', secure: config.NODE_ENV === 'production' });
+      reply.clearCookie(ID_TOKEN_COOKIE, { path: '/', sameSite: 'lax', secure: config.NODE_ENV === 'production' });
+      reply.clearCookie(REFRESH_TOKEN_COOKIE, { path: '/', sameSite: 'lax', secure: config.NODE_ENV === 'production' });
+      return reply.status(401).send({ error: 'Token refresh failed' });
+    }
+  });
+
+  /**
    * GET /auth/logout
    * Clears session and redirects to login (or Identity logout)
    */
@@ -315,9 +394,10 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
-    // Clear all auth cookies (must match sameSite/secure options used when setting)
+    // Clear all auth cookies
     reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/', sameSite: 'lax', secure: config.NODE_ENV === 'production' });
     reply.clearCookie(ID_TOKEN_COOKIE, { path: '/', sameSite: 'lax', secure: config.NODE_ENV === 'production' });
+    reply.clearCookie(REFRESH_TOKEN_COOKIE, { path: '/', sameSite: 'lax', secure: config.NODE_ENV === 'production' });
 
     logger.info('User logged out');
 
@@ -341,9 +421,10 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
-    // Clear all auth cookies (must match sameSite/secure options used when setting)
+    // Clear all auth cookies
     reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/', sameSite: 'lax', secure: config.NODE_ENV === 'production' });
     reply.clearCookie(ID_TOKEN_COOKIE, { path: '/', sameSite: 'lax', secure: config.NODE_ENV === 'production' });
+    reply.clearCookie(REFRESH_TOKEN_COOKIE, { path: '/', sameSite: 'lax', secure: config.NODE_ENV === 'production' });
 
     logger.info('User logged out');
 
@@ -374,12 +455,14 @@ export async function requireAuth(
   const unsigned = request.unsignCookie(tokenCookie);
   if (!unsigned.valid || !unsigned.value) {
     reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/', sameSite: 'lax', secure: config.NODE_ENV === 'production' });
+    reply.clearCookie(REFRESH_TOKEN_COOKIE, { path: '/', sameSite: 'lax', secure: config.NODE_ENV === 'production' });
     return reply.status(401).send({ error: 'Session expired' });
   }
 
   const session = await verifySessionToken(unsigned.value);
   if (!session) {
     reply.clearCookie(AUTH_TOKEN_COOKIE, { path: '/', sameSite: 'lax', secure: config.NODE_ENV === 'production' });
+    reply.clearCookie(REFRESH_TOKEN_COOKIE, { path: '/', sameSite: 'lax', secure: config.NODE_ENV === 'production' });
     return reply.status(401).send({ error: 'Session expired' });
   }
 

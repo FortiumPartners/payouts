@@ -106,7 +106,7 @@ class IdentityClient {
       response_type: 'code',
       client_id: this.clientId,
       redirect_uri: redirectUri,
-      scope: 'openid profile email fortium',
+      scope: 'openid profile email fortium offline_access',
       state,
       nonce,
       code_challenge: codeChallenge,
@@ -133,7 +133,7 @@ class IdentityClient {
   async exchangeCode(
     code: string,
     oidcState: OIDCState
-  ): Promise<{ idToken: string; accessToken: string; claims: FortiumClaims }> {
+  ): Promise<{ idToken: string; accessToken: string; refreshToken?: string; claims: FortiumClaims }> {
     const tokenUrl = new URL(OIDC_ENDPOINTS.token, this.issuer);
 
     const body = new URLSearchParams({
@@ -169,7 +169,44 @@ class IdentityClient {
     return {
       idToken: tokens.id_token,
       accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
       claims,
+    };
+  }
+
+  /**
+   * Exchange refresh token for new tokens
+   */
+  async refreshToken(
+    refreshToken: string
+  ): Promise<{ idToken?: string; accessToken: string; refreshToken?: string }> {
+    const tokenUrl = new URL(OIDC_ENDPOINTS.token, this.issuer);
+
+    const body = new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: this.clientId,
+      client_secret: this.clientSecret,
+      refresh_token: refreshToken,
+    });
+
+    const response = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      logger.error({ status: response.status, body: errorBody }, 'Token refresh failed');
+      throw new Error(`Token refresh failed: ${response.status}`);
+    }
+
+    const tokens = (await response.json()) as TokenResponse;
+
+    return {
+      idToken: tokens.id_token,
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
     };
   }
 
