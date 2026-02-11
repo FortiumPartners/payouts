@@ -161,6 +161,34 @@ export interface ValidationResult {
   passedCount: number;
 }
 
+export interface PaymentExecutionResult {
+  success: boolean;
+  paymentId?: string;
+  paymentRecordId?: string;
+  billId: string;
+  amount: number;
+  status: string;
+  processDate?: string;
+  message: string;
+}
+
+export interface PaymentStatusResult {
+  paymentRecordId: string;
+  pcBillId: string;
+  payeeName: string;
+  amount: number;
+  status: string;
+  billComPaymentId: string | null;
+  billComStatus: string | null;
+  processDate: string | null;
+  executedAt: string | null;
+  executedBy: string | null;
+  failureReason: string | null;
+  paidAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 class ApiClient {
   private async request<T>(
     endpoint: string,
@@ -416,6 +444,21 @@ class ApiClient {
 
   async validateBill(billId: string): Promise<ValidationResult> {
     return this.request(`/bills/${billId}/validate`, { method: 'POST' });
+  }
+
+  // Bill.com Payment Execution
+  async executePayment(
+    billId: string,
+    processDate?: string
+  ): Promise<PaymentExecutionResult> {
+    return this.request(`/payments/execute/${billId}`, {
+      method: 'POST',
+      body: JSON.stringify({ processDate }),
+    });
+  }
+
+  async getPaymentStatus(paymentRecordId: string): Promise<PaymentStatusResult> {
+    return this.request(`/payments/${paymentRecordId}/status`);
   }
 
   async getDashboardStats(): Promise<{

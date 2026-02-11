@@ -17,9 +17,9 @@ import {
   CreditCard,
   AlertCircle,
 } from 'lucide-react';
-import { api, Bill } from '../lib/api';
+import { api, Bill, PaymentStatusResult } from '../lib/api';
 
-type QueueStatus = 'all' | 'pending' | 'validated' | 'paid';
+type QueueStatus = 'all' | 'pending' | 'validated' | 'processing' | 'paid';
 type TenantFilter = 'all' | 'US' | 'CA';
 
 interface QueueItem {
@@ -31,6 +31,8 @@ interface QueueItem {
   status: 'pending' | 'validated' | 'processing' | 'paid' | 'failed';
   dateAdded: string;
   source: 'bill' | 'payment';
+  billComStatus?: string | null;
+  paymentRecordId?: string | null;
 }
 
 interface DashboardStats {
@@ -40,20 +42,22 @@ interface DashboardStats {
   pendingAmount: number;
 }
 
-const statusBadgeClasses: Record<QueueItem['status'], string> = {
+const statusBadgeClasses: Record<string, string> = {
   pending: 'bg-amber-100 text-amber-800',
   validated: 'bg-green-100 text-green-800',
   processing: 'bg-blue-100 text-blue-800',
   paid: 'bg-gray-100 text-gray-600',
   failed: 'bg-red-100 text-red-800',
+  scheduled: 'bg-sky-100 text-sky-800',
 };
 
-const statusLabels: Record<QueueItem['status'], string> = {
+const statusLabels: Record<string, string> = {
   pending: 'Pending',
   validated: 'Validated',
   processing: 'Processing',
   paid: 'Paid',
   failed: 'Failed',
+  scheduled: 'Scheduled',
 };
 
 function formatAmount(amount: number): string {
@@ -74,6 +78,11 @@ export function PaymentQueuePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [executingBillId, setExecutingBillId] = useState<string | null>(null);
+  const [executeResult, setExecuteResult] = useState<{
+    success: boolean;
+    message: string;
+  } | null>(null);
 
   // Filters
   const [statusFilter, setStatusFilter] = useState<QueueStatus>('all');
@@ -108,6 +117,26 @@ export function PaymentQueuePage() {
     setRefreshing(true);
     await fetchData();
     setRefreshing(false);
+  };
+
+  const handleExecutePayment = async (billId: string) => {
+    setExecutingBillId(billId);
+    setExecuteResult(null);
+    try {
+      const result = await api.executePayment(billId);
+      setExecuteResult({ success: result.success, message: result.message });
+      // Refresh queue after execution
+      await fetchData();
+    } catch (err) {
+      setExecuteResult({
+        success: false,
+        message: err instanceof Error ? err.message : 'Payment execution failed',
+      });
+    } finally {
+      setExecutingBillId(null);
+      // Auto-clear success messages
+      setTimeout(() => setExecuteResult(null), 5000);
+    }
   };
 
   // Build unified queue items from bills
@@ -291,7 +320,7 @@ export function PaymentQueuePage() {
               {/* Status filter */}
               <div className="flex gap-2">
                 <span className="self-center text-sm text-muted-foreground mr-1">Status:</span>
-                {(['all', 'pending', 'validated', 'paid'] as const).map((s) => (
+                {(['all', 'pending', 'validated', 'processing', 'paid'] as const).map((s) => (
                   <button
                     key={s}
                     onClick={() => setStatusFilter(s)}
@@ -337,6 +366,30 @@ export function PaymentQueuePage() {
               </div>
             </div>
 
+            {/* Execution result notification */}
+            {executeResult && (
+              <div className={`mb-4 p-4 rounded-lg flex items-center gap-3 ${
+                executeResult.success
+                  ? 'bg-green-50 border border-green-200 text-green-800'
+                  : 'bg-red-50 border border-red-200 text-red-800'
+              }`}>
+                {executeResult.success ? (
+                  <CheckCircle className="h-5 w-5 flex-shrink-0" />
+                ) : (
+                  <AlertCircle className="h-5 w-5 flex-shrink-0" />
+                )}
+                <span className="text-sm">{executeResult.message}</span>
+                <button
+                  onClick={() => setExecuteResult(null)}
+                  className="ml-auto p-1 hover:bg-black/10 rounded"
+                >
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            )}
+
             {/* Queue Table */}
             <div className="rounded-lg border bg-card">
               <div className="border-b px-6 py-4 flex items-center justify-between">
@@ -353,12 +406,14 @@ export function PaymentQueuePage() {
                       <SortHeader field="payeeName" label="Payee" />
                       <SortHeader field="amount" label="Amount" align="right" />
                       <SortHeader field="status" label="Status" />
+                      <th className="px-4 py-3 text-left text-sm font-medium">Payment</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium">Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredItems.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="px-4 py-12 text-center text-muted-foreground">
+                        <td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">
                           No items match your filters.
                         </td>
                       </tr>
@@ -387,10 +442,48 @@ export function PaymentQueuePage() {
                           </td>
                           <td className="px-4 py-3">
                             <span
-                              className={`text-xs px-2 py-1 rounded font-medium ${statusBadgeClasses[item.status]}`}
+                              className={`text-xs px-2 py-1 rounded font-medium ${statusBadgeClasses[item.status] || 'bg-gray-100 text-gray-600'}`}
                             >
-                              {statusLabels[item.status]}
+                              {statusLabels[item.status] || item.status}
                             </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            {item.billComStatus ? (
+                              <span className={`text-xs px-2 py-1 rounded font-medium ${statusBadgeClasses[item.billComStatus] || 'bg-gray-100 text-gray-600'}`}>
+                                {statusLabels[item.billComStatus] || item.billComStatus}
+                              </span>
+                            ) : item.tenant === 'US' ? (
+                              <span className="text-xs text-muted-foreground">Bill.com</span>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">Wise</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                            {item.status === 'validated' && item.tenant === 'US' && (
+                              <button
+                                onClick={() => handleExecutePayment(item.id)}
+                                disabled={executingBillId === item.id}
+                                className="flex items-center gap-1 px-3 py-1 rounded text-xs font-medium bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50 disabled:cursor-wait"
+                              >
+                                {executingBillId === item.id ? (
+                                  <>
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                    Executing...
+                                  </>
+                                ) : (
+                                  <>
+                                    <CreditCard className="h-3 w-3" />
+                                    Execute
+                                  </>
+                                )}
+                              </button>
+                            )}
+                            {item.status === 'processing' && (
+                              <span className="text-xs text-blue-600 font-medium flex items-center gap-1">
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                                Processing
+                              </span>
+                            )}
                           </td>
                         </tr>
                       ))
