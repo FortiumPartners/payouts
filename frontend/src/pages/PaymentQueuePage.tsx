@@ -17,7 +17,7 @@ import {
   CreditCard,
   AlertCircle,
 } from 'lucide-react';
-import { api, Bill, PaymentStatusResult } from '../lib/api';
+import { api, Bill } from '../lib/api';
 
 type QueueStatus = 'all' | 'pending' | 'validated' | 'processing' | 'paid';
 type TenantFilter = 'all' | 'US' | 'CA';

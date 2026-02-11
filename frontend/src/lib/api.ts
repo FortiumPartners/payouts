@@ -457,7 +457,7 @@ class ApiClient {
     });
   }
 
-  async getPaymentStatus(paymentRecordId: string): Promise<PaymentStatusResult> {
+  async getBillComPaymentStatus(paymentRecordId: string): Promise<PaymentStatusResult> {
     return this.request(`/payments/${paymentRecordId}/status`);
   }
 
