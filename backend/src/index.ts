@@ -18,6 +18,8 @@ import { statusRoutes } from './routes/status.js';
 import { validationRulesRoutes } from './routes/validation-rules.js';
 import { billcomPaymentsRoutes } from './routes/billcom-payments.js';
 import { billcomWebhookRoutes } from './routes/billcom-webhooks.js';
+import { wisePaymentsRoutes } from './routes/wise-payments.js';
+import { wiseWebhookRoutes } from './routes/wise-webhooks.js';
 
 const fastify = Fastify({
   logger: {
@@ -71,6 +73,8 @@ async function main() {
   await fastify.register(validationRulesRoutes, { prefix: '/api/rules' });
   await fastify.register(billcomPaymentsRoutes, { prefix: '/api/payments' });
   await fastify.register(billcomWebhookRoutes, { prefix: '/webhooks/billcom' });
+  await fastify.register(wisePaymentsRoutes, { prefix: '/api/payments/wise' });
+  await fastify.register(wiseWebhookRoutes, { prefix: '/webhooks/wise' });
 
   // Start server
   try {
