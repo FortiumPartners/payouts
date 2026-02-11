@@ -63,6 +63,17 @@ export interface BillComPayment {
   processDate?: string;
 }
 
+export interface BillComSentPayStatus {
+  id: string;
+  vendorId: string;
+  amount: number;
+  status: string; // '1' = Scheduled, '2' = Paid, '4' = Canceled, '5' = Failed
+  processDate: string;
+  toPrintDate?: string;
+  syncReference?: string;
+  description?: string;
+}
+
 // v2 API base URL (v3 requires different dev key registration)
 const V2_API_URL = 'https://api.bill.com/api/v2';
 
@@ -457,6 +468,131 @@ export class BillComClient {
       status: billPay?.paymentStatus === '1' ? 'scheduled' : 'pending',
       processDate: billPay?.processDate || payDate,
     };
+  }
+
+  /**
+   * Create a vendor bill in Bill.com.
+   * Used when a bill exists in QBO/PC but not yet in Bill.com.
+   */
+  async createVendorBill(params: {
+    vendorId: string;
+    invoiceNumber: string;
+    invoiceDate: string;
+    dueDate: string;
+    amount: number;
+    description?: string;
+  }): Promise<BillComBill> {
+    const result = await this.request<{
+      id: string;
+      vendorId: string;
+      invoiceNumber: string;
+      invoiceDate: string;
+      dueDate: string;
+      amount: number;
+      dueAmount: number;
+      paymentStatus: string;
+      approvalStatus: string;
+    }>('/Crud/Create/Bill.json', {
+      obj: {
+        entity: 'Bill',
+        vendorId: params.vendorId,
+        invoiceNumber: params.invoiceNumber,
+        invoiceDate: params.invoiceDate,
+        dueDate: params.dueDate,
+        amount: params.amount,
+        description: params.description || '',
+      },
+    });
+
+    return {
+      id: result.id,
+      vendorId: result.vendorId,
+      invoiceNumber: result.invoiceNumber,
+      invoiceDate: result.invoiceDate,
+      dueDate: result.dueDate,
+      amount: result.amount,
+      dueAmount: result.dueAmount,
+      paymentStatus: result.paymentStatus,
+      approvalStatus: result.approvalStatus,
+    };
+  }
+
+  /**
+   * Get payment status by SentPay ID.
+   * Maps Bill.com numeric status to human-readable values.
+   */
+  async getPaymentStatus(sentPayId: string): Promise<BillComSentPayStatus> {
+    const result = await this.request<{
+      id: string;
+      vendorId: string;
+      amount: number;
+      status: string;
+      processDate: string;
+      toPrintDate?: string;
+      syncReference?: string;
+      description?: string;
+    }>('/Read/SentPay.json', { id: sentPayId });
+
+    return {
+      id: result.id,
+      vendorId: result.vendorId,
+      amount: result.amount,
+      status: result.status,
+      processDate: result.processDate,
+      toPrintDate: result.toPrintDate,
+      syncReference: result.syncReference,
+      description: result.description,
+    };
+  }
+
+  /**
+   * Map Bill.com numeric payment status to human-readable string.
+   */
+  static mapPaymentStatus(numericStatus: string): string {
+    const statusMap: Record<string, string> = {
+      '1': 'scheduled',
+      '2': 'paid',
+      '3': 'canceled',
+      '4': 'void',
+      '5': 'failed',
+    };
+    return statusMap[numericStatus] || `unknown_${numericStatus}`;
+  }
+
+  /**
+   * List recent sent payments, optionally filtered by vendor.
+   */
+  async listSentPays(vendorId?: string, max = 10): Promise<BillComSentPayStatus[]> {
+    const filters: Array<{ field: string; op: string; value: string }> = [];
+    if (vendorId) {
+      filters.push({ field: 'vendorId', op: '=', value: vendorId });
+    }
+
+    const results = await this.request<Array<{
+      id: string;
+      vendorId: string;
+      amount: number;
+      status: string;
+      processDate: string;
+      toPrintDate?: string;
+      syncReference?: string;
+      description?: string;
+    }>>('/List/SentPay.json', {
+      start: 0,
+      max,
+      filters,
+    });
+
+    return (results || []).map(sp => ({
+      id: sp.id,
+      vendorId: sp.vendorId,
+      amount: sp.amount,
+      status: sp.status,
+      processDate: sp.processDate,
+      toPrintDate: sp.toPrintDate,
+      syncReference: sp.syncReference,
+      description: sp.description,
+    }));
   }
 
   /**

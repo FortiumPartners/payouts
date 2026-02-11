@@ -37,6 +37,7 @@ const envSchema = z.object({
   BILLCOM_ORG_ID: z.string().optional(),
   BILLCOM_MFA_ID: z.string().optional(),
   BILLCOM_DEVICE_ID: z.string().default('fortium-payouts'),
+  BILLCOM_WEBHOOK_SECRET: z.string().optional(), // For verifying webhook signatures
 
   // Wise
   WISE_API_URL: z.string().default('https://api.wise.com'),

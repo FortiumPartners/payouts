@@ -54,13 +54,20 @@ model PaymentRecord {
   payeeVendorId  String    // Bill.com or Wise vendor ID
   payeeName      String    // Vendor/payee name for display
   amount         Decimal   @db.Decimal(12, 2)
-  status         String    // pending_controls, ready, processing, paid, failed
+  status         String    // pending_controls, ready, queued, processing, paid, failed
   controlResults Json      // { invoicePaid: true, invoiceNotVoided: true, ... }
   failureReason  String?   // Reason if status is 'failed'
   paidAt         DateTime?
   paymentRef     String?   // External payment reference from Bill.com/Wise
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
+
+  // Bill.com payment execution tracking
+  billComBillId  String?   // Bill.com bill ID (from their system)
+  billComPaymentId String? // Bill.com SentPay ID
+  processDate    String?   // Scheduled process date (YYYY-MM-DD)
+  executedAt     DateTime? // When payment was submitted to Bill.com
+  executedBy     String?   // User who triggered execution
 
   // Email tracking (Phase 1: Wise payment confirmations)
   payeeEmail     String?   // Email address used for notification
@@ -72,6 +79,8 @@ model PaymentRecord {
   @@index([tenantId])
   @@index([status])
   @@index([pcBillId])
+  @@index([paymentRef])
+  @@index([billComPaymentId])
   @@map("payment_records")
 }
 
