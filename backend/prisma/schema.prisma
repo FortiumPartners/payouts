@@ -66,8 +66,16 @@ model PaymentRecord {
   billComBillId  String?   // Bill.com bill ID (from their system)
   billComPaymentId String? // Bill.com SentPay ID
   processDate    String?   // Scheduled process date (YYYY-MM-DD)
-  executedAt     DateTime? // When payment was submitted to Bill.com
+  executedAt     DateTime? // When payment was submitted to Bill.com/Wise
   executedBy     String?   // User who triggered execution
+
+  // Wise payment execution tracking
+  wiseTransferId   Int?      // Wise transfer ID
+  wiseQuoteId      String?   // Wise quote UUID
+  wiseCurrency     String?   // Target currency (e.g., 'CAD')
+  wiseExchangeRate Decimal?  @db.Decimal(12, 6) // Exchange rate used
+  wiseTargetAmount Decimal?  @db.Decimal(12, 2) // Amount in target currency
+  wiseFee          Decimal?  @db.Decimal(12, 2) // Wise fee
 
   // Email tracking (Phase 1: Wise payment confirmations)
   payeeEmail     String?   // Email address used for notification
@@ -81,6 +89,7 @@ model PaymentRecord {
   @@index([pcBillId])
   @@index([paymentRef])
   @@index([billComPaymentId])
+  @@index([wiseTransferId])
   @@map("payment_records")
 }
 
