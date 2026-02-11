@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { getPartnerConnectClient, PCBill } from '../services/partnerconnect.js';
 import { runControlChecks, ControlCheckResults } from '../services/controls.js';
+import { validateBill, type BillData } from '../services/validation-rules.js';
 import { requireAuth } from './auth.js';
 
 // Response schemas
@@ -88,16 +89,19 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
       // Fetch payable bills from PartnerConnect
       const rawBills = await pcClient.getPayableBills();
 
-      // Get already-paid bills to filter them out
-      const paidRecords = await prisma.paymentRecord.findMany({
-        where: { status: 'paid' },
-        select: { pcBillId: true },
-      });
-      const paidBillIds = new Set(paidRecords.map(p => p.pcBillId));
+      // Get already-paid and dismissed bills to filter them out
+      const [paidRecords, dismissedRecords] = await Promise.all([
+        prisma.paymentRecord.findMany({ where: { status: 'paid' }, select: { pcBillId: true } }),
+        prisma.dismissedBill.findMany({ select: { pcBillId: true } }),
+      ]);
+      const excludedIds = new Set([
+        ...paidRecords.map(p => p.pcBillId),
+        ...dismissedRecords.map(d => d.pcBillId),
+      ]);
 
-      // Filter out bills that have already been paid
-      const unpaidBills = rawBills.filter(b => !paidBillIds.has(b.uid));
-      fastify.log.info({ total: rawBills.length, paid: paidBillIds.size, unpaid: unpaidBills.length }, 'Bills filtered');
+      // Filter out bills that have already been paid or dismissed
+      const unpaidBills = rawBills.filter(b => !excludedIds.has(b.uid));
+      fastify.log.info({ total: rawBills.length, paid: paidRecords.length, dismissed: dismissedRecords.length, unpaid: unpaidBills.length }, 'Bills filtered');
 
       // Get tenants for proving period config
       const tenants = await prisma.tenant.findMany();
@@ -232,6 +236,102 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   /**
+   * GET /api/bills/dismissed - List all dismissed bills
+   */
+  fastify.get('/dismissed', async () => {
+    const dismissed = await prisma.dismissedBill.findMany({
+      orderBy: { dismissedAt: 'desc' },
+    });
+    return { dismissed };
+  });
+
+  /**
+   * POST /api/bills/:id/dismiss - Dismiss a bill from the active queue
+   */
+  fastify.post('/:id/dismiss', {
+    schema: {
+      params: z.object({ id: z.string() }),
+      body: z.object({
+        reason: z.string().min(1),
+        dismissedBy: z.string().min(1),
+        payeeName: z.string(),
+        clientName: z.string(),
+        amount: z.number(),
+        tenantCode: z.string(),
+        description: z.string().optional(),
+        qboInvoiceNum: z.string().optional(),
+        qboBillNum: z.string().optional(),
+      }),
+    },
+  }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as {
+      reason: string;
+      dismissedBy: string;
+      payeeName: string;
+      clientName: string;
+      amount: number;
+      tenantCode: string;
+      description?: string;
+      qboInvoiceNum?: string;
+      qboBillNum?: string;
+    };
+
+    // Check if already paid
+    const paidRecord = await prisma.paymentRecord.findFirst({
+      where: { pcBillId: id, status: 'paid' },
+    });
+    if (paidRecord) {
+      return reply.status(409).send({ error: 'Bill has already been paid', statusCode: 409 });
+    }
+
+    // Check if already dismissed
+    const existing = await prisma.dismissedBill.findUnique({ where: { pcBillId: id } });
+    if (existing) {
+      return reply.status(409).send({ error: 'Bill is already dismissed', statusCode: 409 });
+    }
+
+    const dismissed = await prisma.dismissedBill.create({
+      data: {
+        pcBillId: id,
+        reason: body.reason,
+        dismissedBy: body.dismissedBy,
+        payeeName: body.payeeName,
+        clientName: body.clientName,
+        amount: body.amount,
+        tenantCode: body.tenantCode,
+        description: body.description,
+        qboInvoiceNum: body.qboInvoiceNum,
+        qboBillNum: body.qboBillNum,
+      },
+    });
+
+    fastify.log.info({ pcBillId: id, dismissedBy: body.dismissedBy }, 'Bill dismissed');
+    return dismissed;
+  });
+
+  /**
+   * POST /api/bills/:id/restore - Restore a dismissed bill to active queue
+   */
+  fastify.post('/:id/restore', {
+    schema: {
+      params: z.object({ id: z.string() }),
+    },
+  }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+
+    const existing = await prisma.dismissedBill.findUnique({ where: { pcBillId: id } });
+    if (!existing) {
+      return reply.status(404).send({ error: 'Dismissed bill not found', statusCode: 404 });
+    }
+
+    await prisma.dismissedBill.delete({ where: { pcBillId: id } });
+
+    fastify.log.info({ pcBillId: id }, 'Bill restored');
+    return { success: true, pcBillId: id };
+  });
+
+  /**
    * GET /api/bills/:id - Get single bill with full control details
    */
   fastify.get('/:id', {
@@ -292,6 +392,82 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
       fastify.log.error(err, `Failed to fetch bill ${id}`);
       return reply.status(500).send({
         error: 'Failed to fetch bill',
+        message: String(err),
+        statusCode: 500,
+      });
+    }
+  });
+
+  /**
+   * POST /api/bills/:id/validate - Run validation rules against a bill
+   */
+  fastify.post('/:id/validate', {
+    schema: {
+      params: z.object({ id: z.string() }),
+      response: {
+        200: z.object({
+          billId: z.string(),
+          passed: z.boolean(),
+          results: z.array(z.object({
+            ruleId: z.string(),
+            ruleName: z.string(),
+            ruleType: z.string(),
+            passed: z.boolean(),
+            reason: z.string(),
+          })),
+          failedCount: z.number(),
+          passedCount: z.number(),
+        }),
+      },
+    },
+  }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+
+    const pcClient = getPartnerConnectClient();
+
+    if (!pcClient.isConfigured()) {
+      return reply.status(503).send({
+        error: 'PartnerConnect not configured',
+        statusCode: 503,
+      });
+    }
+
+    try {
+      const bill = await pcClient.getBill(id);
+      const isCanada = ['CA', 'CAN', 'Canada'].includes(bill.tenantCode);
+
+      const billData: BillData = {
+        uid: bill.uid,
+        payeeName: bill.resourceName,
+        clientName: bill.clientName,
+        amount: bill.adjustedBillPayment,
+        description: bill.description,
+        tenantCode: isCanada ? 'CA' : 'US',
+        date: bill.trxDate?.toISOString().split('T')[0],
+        status: bill.statusCode,
+        qboInvoiceNum: bill.externalInvoiceDocNum || null,
+        qboBillNum: bill.externalBillDocNum || null,
+      };
+
+      // Fetch all bills for duplicate detection
+      const rawBills = await pcClient.getPayableBills();
+      const allBillData: BillData[] = rawBills.map(b => ({
+        uid: b.uid,
+        payeeName: b.resourceName,
+        clientName: b.clientName,
+        amount: b.adjustedBillPayment,
+        description: b.description,
+        tenantCode: ['CA', 'CAN', 'Canada'].includes(b.tenantCode) ? 'CA' : 'US',
+        date: b.trxDate?.toISOString().split('T')[0],
+        status: b.statusCode,
+      }));
+
+      const result = await validateBill(billData, allBillData);
+      return result;
+    } catch (err) {
+      fastify.log.error(err, `Failed to validate bill ${id}`);
+      return reply.status(500).send({
+        error: 'Failed to validate bill',
         message: String(err),
         statusCode: 500,
       });
