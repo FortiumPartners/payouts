@@ -43,7 +43,7 @@ const envSchema = z.object({
   WISE_API_URL: z.string().default('https://api.wise.com'),
   WISE_API_TOKEN: z.string().optional(),
   WISE_SANDBOX: z.string().default('false'), // 'true' for sandbox
-  WISE_WEBHOOK_SECRET: z.string().optional(), // For verifying Wise webhook signatures
+  WISE_WEBHOOK_SECRET: z.string().optional(), // RSA public key (PEM) for verifying Wise webhook signatures
 
   // Email (Postmark)
   POSTMARK_API_TOKEN: z.string().optional(),

@@ -120,7 +120,8 @@ export const billcomPaymentsRoutes: FastifyPluginAsync = async (fastify) => {
       const bill = await pcClient.getBill(billId);
 
       // Only US bills go through Bill.com
-      if (bill.tenantCode === 'CA') {
+      const isCanada = ['CA', 'CAN', 'Canada'].includes(bill.tenantCode);
+      if (isCanada) {
         return reply.status(400).send({
           success: false,
           billId,
@@ -186,10 +187,20 @@ export const billcomPaymentsRoutes: FastifyPluginAsync = async (fastify) => {
       const user = (request as { user?: { email?: string } }).user;
       const executedBy = user?.email || 'unknown';
 
+      if (!tenant) {
+        return reply.status(500).send({
+          success: false,
+          billId,
+          amount: bill.adjustedBillPayment,
+          status: 'error',
+          message: 'Tenant "US" not configured in database',
+        });
+      }
+
       // Create payment record with full execution tracking
       const paymentRecord = await prisma.paymentRecord.create({
         data: {
-          tenantId: tenant!.id,
+          tenantId: tenant.id,
           pcBillId: billId,
           qboInvoiceId: bill.externalInvoiceDocNum || '',
           payeeVendorId: billcomBill.vendorId,
@@ -239,7 +250,7 @@ export const billcomPaymentsRoutes: FastifyPluginAsync = async (fastify) => {
         billId,
         amount: 0,
         status: 'error',
-        message: String(err),
+        message: 'Payment execution failed. Check server logs for details.',
       });
     }
   });

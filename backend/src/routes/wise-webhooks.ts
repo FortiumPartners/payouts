@@ -5,7 +5,8 @@
  * Wise sends webhooks as POST requests with JSON payloads.
  * Webhook events include: transfers#state-change, balances#credit
  *
- * Wise signs webhooks using RSA-SHA256 with their public key.
+ * Wise signs webhooks using RSA-SHA256 with their public key (not HMAC).
+ * Set WISE_WEBHOOK_SECRET to the PEM-formatted RSA public key from Wise.
  * Docs: https://docs.wise.com/api-docs/features/webhooks-notifications
  *
  * POST /webhooks/wise - Receive webhook events
@@ -42,25 +43,24 @@ const webhookResponseSchema = z.object({
 
 /**
  * Verify Wise webhook signature.
- * Wise uses HMAC-SHA256 with the webhook secret for signature verification.
- * The signature is sent in the X-Signature-SHA256 header.
+ * Wise uses RSA-SHA256 with their public key for signature verification.
+ * The base64-encoded signature is sent in the X-Signature-SHA256 header.
+ * See: https://docs.wise.com/api-docs/features/webhooks-notifications
  */
 function verifyWebhookSignature(
   payload: string,
   signature: string | undefined,
-  secret: string
+  publicKeyPem: string
 ): boolean {
-  if (!signature || !secret) return false;
-
-  const expected = crypto
-    .createHmac('sha256', secret)
-    .update(payload)
-    .digest('hex');
+  if (!signature || !publicKeyPem) return false;
 
   try {
-    return crypto.timingSafeEqual(
-      Buffer.from(signature),
-      Buffer.from(expected)
+    const publicKey = crypto.createPublicKey({ key: publicKeyPem, format: 'pem' });
+    return crypto.verify(
+      'RSA-SHA256',
+      Buffer.from(payload),
+      { key: publicKey, padding: crypto.constants.RSA_PKCS1_PADDING },
+      Buffer.from(signature, 'base64')
     );
   } catch {
     return false;
@@ -118,7 +118,7 @@ export const wiseWebhookRoutes: FastifyPluginAsync = async (fastify) => {
     const rawBody = (request as { rawBody?: string }).rawBody;
     const signature = request.headers['x-signature-sha256'] as string | undefined;
 
-    // Verify webhook signature if secret is configured
+    // Verify webhook signature if public key is configured
     if (config.WISE_WEBHOOK_SECRET) {
       if (!verifyWebhookSignature(rawBody || '', signature, config.WISE_WEBHOOK_SECRET)) {
         fastify.log.warn('Wise webhook signature verification failed');
@@ -127,6 +127,8 @@ export const wiseWebhookRoutes: FastifyPluginAsync = async (fastify) => {
           message: 'Invalid webhook signature',
         });
       }
+    } else {
+      fastify.log.warn('WISE_WEBHOOK_SECRET not configured — webhook signature verification skipped');
     }
 
     const payload = request.body as z.infer<typeof wiseWebhookPayloadSchema>;

@@ -139,7 +139,8 @@ export const wisePaymentsRoutes: FastifyPluginAsync = async (fastify) => {
       const bill = await pcClient.getBill(billId);
 
       // Only CA bills go through Wise
-      if (bill.tenantCode !== 'CA') {
+      const isCanada = ['CA', 'CAN', 'Canada'].includes(bill.tenantCode);
+      if (!isCanada) {
         return reply.status(400).send({
           success: false,
           billId,
@@ -272,65 +273,30 @@ export const wisePaymentsRoutes: FastifyPluginAsync = async (fastify) => {
         transfer = await wise.createTransfer(quote.id, recipientAccountId, reference);
       }
 
-      // Fund the transfer from Wise balance
-      const fundResult = await wise.fundTransfer(transfer.id);
-
-      fastify.log.info({
-        billId,
-        transferId: transfer.id,
-        amount: bill.adjustedBillPayment,
-        targetAmount: quote.targetAmount,
-        targetCurrency: recipient.targetCurrency,
-        rate: quote.rate,
-        fee: quote.fee,
-      }, 'Wise payment executed');
-
       // Get the authenticated user's email
       const user = (request as { user?: { email?: string } }).user;
       const executedBy = user?.email || 'unknown';
 
-      // Send payment confirmation email
-      const emailService = getEmailService();
-      let emailResult: { success: boolean; messageId?: string; errorMessage?: string } = {
-        success: false,
-        messageId: undefined,
-        errorMessage: 'Not attempted',
-      };
-      const payeeEmail = bill.payeeEmail;
-
-      if (payeeEmail && emailService.isConfigured()) {
-        emailResult = await emailService.sendPaymentConfirmation({
-          to: payeeEmail,
-          payeeName: bill.resourceName,
-          amountCAD: bill.adjustedBillPayment,
-          targetAmount: quote.targetAmount,
-          targetCurrency: recipient.targetCurrency,
-          exchangeRate: quote.rate,
-          invoiceReference: bill.externalInvoiceDocNum || bill.uid,
-          description: bill.description,
-          expectedDelivery: quote.paymentOptions?.[0]?.estimatedDelivery || new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
-          transferId: transfer.id,
+      if (!tenant) {
+        return reply.status(500).send({
+          success: false,
+          billId,
+          amount: bill.adjustedBillPayment,
+          status: 'error',
+          message: 'Tenant "Canada" not configured in database',
         });
-
-        if (!emailResult.success) {
-          fastify.log.warn({
-            billId,
-            payeeEmail,
-            error: emailResult.errorMessage,
-          }, 'Payment email failed - payment still succeeded');
-        }
       }
 
-      // Create payment record with full execution tracking
+      // Create payment record BEFORE funding (atomic: ensures DB record exists if funding succeeds)
       const paymentRecord = await prisma.paymentRecord.create({
         data: {
-          tenantId: tenant!.id,
+          tenantId: tenant.id,
           pcBillId: billId,
           qboInvoiceId: bill.externalInvoiceDocNum || '',
           payeeVendorId: recipient.wiseContactId || recipient.wiseEmail || 'unknown',
           payeeName: bill.resourceName,
           amount: bill.adjustedBillPayment,
-          status: 'processing',
+          status: 'queued',
           controlResults: JSON.parse(JSON.stringify(controlResults)),
           paymentRef: String(transfer.id),
           executedAt: new Date(),
@@ -342,12 +308,6 @@ export const wisePaymentsRoutes: FastifyPluginAsync = async (fastify) => {
           wiseExchangeRate: quote.rate,
           wiseTargetAmount: quote.targetAmount,
           wiseFee: quote.fee,
-          // Email tracking
-          payeeEmail: payeeEmail || null,
-          emailSentAt: emailResult.success ? new Date() : null,
-          emailMessageId: emailResult.messageId || null,
-          emailStatus: emailResult.success ? 'sent' : (payeeEmail ? 'failed' : 'skipped'),
-          emailError: emailResult.success ? null : emailResult.errorMessage,
         },
       });
 
@@ -355,7 +315,74 @@ export const wisePaymentsRoutes: FastifyPluginAsync = async (fastify) => {
         billId,
         paymentRecordId: paymentRecord.id,
         wiseTransferId: transfer.id,
-      }, 'PaymentRecord created for Wise execution');
+      }, 'PaymentRecord created, funding transfer');
+
+      // Fund the transfer from Wise balance
+      let fundResult;
+      try {
+        fundResult = await wise.fundTransfer(transfer.id);
+      } catch (fundErr) {
+        // Funding failed — mark record as failed so it's not orphaned
+        await prisma.paymentRecord.update({
+          where: { id: paymentRecord.id },
+          data: { status: 'failed', failureReason: `Funding failed: ${String(fundErr)}` },
+        });
+        throw fundErr;
+      }
+
+      // Update record to processing now that funding succeeded
+      await prisma.paymentRecord.update({
+        where: { id: paymentRecord.id },
+        data: { status: 'processing' },
+      });
+
+      fastify.log.info({
+        billId,
+        transferId: transfer.id,
+        amount: bill.adjustedBillPayment,
+        targetAmount: quote.targetAmount,
+        targetCurrency: recipient.targetCurrency,
+        rate: quote.rate,
+        fee: quote.fee,
+      }, 'Wise payment funded');
+
+      // Send payment confirmation email (non-critical — don't fail the payment)
+      const emailService = getEmailService();
+      const payeeEmail = bill.payeeEmail;
+
+      if (payeeEmail && emailService.isConfigured()) {
+        try {
+          const emailResult = await emailService.sendPaymentConfirmation({
+            to: payeeEmail,
+            payeeName: bill.resourceName,
+            amountCAD: bill.adjustedBillPayment,
+            targetAmount: quote.targetAmount,
+            targetCurrency: recipient.targetCurrency,
+            exchangeRate: quote.rate,
+            invoiceReference: bill.externalInvoiceDocNum || bill.uid,
+            description: bill.description,
+            expectedDelivery: quote.paymentOptions?.[0]?.estimatedDelivery || new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
+            transferId: transfer.id,
+          });
+
+          await prisma.paymentRecord.update({
+            where: { id: paymentRecord.id },
+            data: {
+              payeeEmail,
+              emailSentAt: emailResult.success ? new Date() : null,
+              emailMessageId: emailResult.messageId || null,
+              emailStatus: emailResult.success ? 'sent' : 'failed',
+              emailError: emailResult.success ? null : emailResult.errorMessage,
+            },
+          });
+
+          if (!emailResult.success) {
+            fastify.log.warn({ billId, payeeEmail, error: emailResult.errorMessage }, 'Payment email failed - payment still succeeded');
+          }
+        } catch (emailErr) {
+          fastify.log.warn({ billId, payeeEmail, err: emailErr }, 'Payment email error - payment still succeeded');
+        }
+      }
 
       return {
         success: true,
@@ -388,7 +415,7 @@ export const wisePaymentsRoutes: FastifyPluginAsync = async (fastify) => {
         billId,
         amount: 0,
         status: 'error',
-        message: String(err),
+        message: 'Wise payment execution failed. Check server logs for details.',
       });
     }
   });

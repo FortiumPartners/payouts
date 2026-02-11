@@ -46,10 +46,14 @@ function verifyWebhookSignature(
     .update(payload)
     .digest('hex');
 
-  return crypto.timingSafeEqual(
-    Buffer.from(signature),
-    Buffer.from(expected)
-  );
+  try {
+    return crypto.timingSafeEqual(
+      Buffer.from(signature),
+      Buffer.from(expected)
+    );
+  } catch {
+    return false;
+  }
 }
 
 export const billcomWebhookRoutes: FastifyPluginAsync = async (fastify) => {
@@ -92,6 +96,8 @@ export const billcomWebhookRoutes: FastifyPluginAsync = async (fastify) => {
           message: 'Invalid webhook signature',
         });
       }
+    } else {
+      fastify.log.warn('BILLCOM_WEBHOOK_SECRET not configured — webhook signature verification skipped');
     }
 
     const payload = request.body as z.infer<typeof webhookPayloadSchema>;
