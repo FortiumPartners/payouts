@@ -141,6 +141,7 @@ interface BillsListProps {
   viewMode: ViewMode;
   controlStates: Map<string, BillControlState>;
   onPayBill?: (bill: Bill) => void;
+  onDismissBill?: (bill: Bill) => void;
 }
 
 interface PayeeGroup {
@@ -171,11 +172,13 @@ function BillRow({
   bill,
   controlState,
   onPay,
+  onDismiss,
   indented = false,
 }: {
   bill: Bill;
   controlState?: BillControlState;
   onPay?: (bill: Bill) => void;
+  onDismiss?: (bill: Bill) => void;
   indented?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -225,24 +228,33 @@ function BillRow({
           />
         </td>
         <td className="px-4 py-3">
-          <button
-            onClick={() => onPay?.(bill)}
-            disabled={!readyToPay || controlState?.status === 'checking'}
-            className={`px-3 py-1 rounded text-sm font-medium ${
-              readyToPay
-                ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+          <div className="flex gap-2">
+            <button
+              onClick={() => onPay?.(bill)}
+              disabled={!readyToPay || controlState?.status === 'checking'}
+              className={`px-3 py-1 rounded text-sm font-medium ${
+                readyToPay
+                  ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                  : controlState?.status === 'checking'
+                  ? 'bg-muted text-muted-foreground cursor-wait'
+                  : 'bg-muted text-muted-foreground cursor-not-allowed'
+              }`}
+              title={readyToPay
+                ? `Pay via ${bill.tenantCode === 'CA' ? 'Wise' : 'Bill.com'}`
                 : controlState?.status === 'checking'
-                ? 'bg-muted text-muted-foreground cursor-wait'
-                : 'bg-muted text-muted-foreground cursor-not-allowed'
-            }`}
-            title={readyToPay
-              ? `Pay via ${bill.tenantCode === 'CA' ? 'Wise' : 'Bill.com'}`
-              : controlState?.status === 'checking'
-              ? 'Checking controls...'
-              : 'Controls not passed'}
-          >
-            Pay
-          </button>
+                ? 'Checking controls...'
+                : 'Controls not passed'}
+            >
+              Pay
+            </button>
+            <button
+              onClick={() => onDismiss?.(bill)}
+              className="px-3 py-1 rounded text-sm font-medium border border-amber-300 text-amber-700 hover:bg-amber-50"
+              title="Dismiss bill from active queue"
+            >
+              Dismiss
+            </button>
+          </div>
         </td>
       </tr>
       {expanded && (
@@ -377,10 +389,12 @@ function PayeeGroupRow({
   group,
   controlStates,
   onPay,
+  onDismiss,
 }: {
   group: PayeeGroup;
   controlStates: Map<string, BillControlState>;
   onPay?: (bill: Bill) => void;
+  onDismiss?: (bill: Bill) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -428,6 +442,7 @@ function PayeeGroupRow({
           bill={bill}
           controlState={controlStates.get(bill.uid)}
           onPay={onPay}
+          onDismiss={onDismiss}
           indented
         />
       ))}
@@ -440,10 +455,12 @@ function ListView({
   bills,
   controlStates,
   onPayBill,
+  onDismissBill,
 }: {
   bills: Bill[];
   controlStates: Map<string, BillControlState>;
   onPayBill?: (bill: Bill) => void;
+  onDismissBill?: (bill: Bill) => void;
 }) {
   return (
     <table className="w-full">
@@ -466,6 +483,7 @@ function ListView({
             bill={bill}
             controlState={controlStates.get(bill.uid)}
             onPay={onPayBill}
+            onDismiss={onDismissBill}
           />
         ))}
       </tbody>
@@ -478,10 +496,12 @@ function GroupedView({
   bills,
   controlStates,
   onPayBill,
+  onDismissBill,
 }: {
   bills: Bill[];
   controlStates: Map<string, BillControlState>;
   onPayBill?: (bill: Bill) => void;
+  onDismissBill?: (bill: Bill) => void;
 }) {
   const groups = useMemo(() => {
     const groupMap = new Map<string, Bill[]>();
@@ -520,6 +540,7 @@ function GroupedView({
             group={group}
             controlStates={controlStates}
             onPay={onPayBill}
+            onDismiss={onDismissBill}
           />
         ))}
       </tbody>
@@ -527,7 +548,7 @@ function GroupedView({
   );
 }
 
-export function BillsList({ bills, loading, error, viewMode, controlStates, onPayBill }: BillsListProps) {
+export function BillsList({ bills, loading, error, viewMode, controlStates, onPayBill, onDismissBill }: BillsListProps) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -558,9 +579,9 @@ export function BillsList({ bills, loading, error, viewMode, controlStates, onPa
   return (
     <div className="overflow-x-auto">
       {viewMode === 'list' ? (
-        <ListView bills={bills} controlStates={controlStates} onPayBill={onPayBill} />
+        <ListView bills={bills} controlStates={controlStates} onPayBill={onPayBill} onDismissBill={onDismissBill} />
       ) : (
-        <GroupedView bills={bills} controlStates={controlStates} onPayBill={onPayBill} />
+        <GroupedView bills={bills} controlStates={controlStates} onPayBill={onPayBill} onDismissBill={onDismissBill} />
       )}
     </div>
   );

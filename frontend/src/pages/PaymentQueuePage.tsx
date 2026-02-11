@@ -139,6 +139,24 @@ export function PaymentQueuePage() {
     }
   };
 
+  const handleExecuteWisePayment = async (billId: string) => {
+    setExecutingBillId(billId);
+    setExecuteResult(null);
+    try {
+      const result = await api.executeWisePayment(billId);
+      setExecuteResult({ success: result.success, message: result.message });
+      await fetchData();
+    } catch (err) {
+      setExecuteResult({
+        success: false,
+        message: err instanceof Error ? err.message : 'Wise payment execution failed',
+      });
+    } finally {
+      setExecutingBillId(null);
+      setTimeout(() => setExecuteResult(null), 5000);
+    }
+  };
+
   // Build unified queue items from bills
   const queueItems: QueueItem[] = useMemo(() => {
     return bills.map((bill): QueueItem => ({
@@ -473,7 +491,26 @@ export function PaymentQueuePage() {
                                 ) : (
                                   <>
                                     <CreditCard className="h-3 w-3" />
-                                    Execute
+                                    Bill.com
+                                  </>
+                                )}
+                              </button>
+                            )}
+                            {item.status === 'validated' && item.tenant === 'CA' && (
+                              <button
+                                onClick={() => handleExecuteWisePayment(item.id)}
+                                disabled={executingBillId === item.id}
+                                className="flex items-center gap-1 px-3 py-1 rounded text-xs font-medium bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-50 disabled:cursor-wait"
+                              >
+                                {executingBillId === item.id ? (
+                                  <>
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                    Executing...
+                                  </>
+                                ) : (
+                                  <>
+                                    <CreditCard className="h-3 w-3" />
+                                    Wise
                                   </>
                                 )}
                               </button>

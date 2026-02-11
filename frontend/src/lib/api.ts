@@ -189,6 +189,40 @@ export interface PaymentStatusResult {
   updatedAt: string;
 }
 
+export interface WisePaymentExecutionResult {
+  success: boolean;
+  transferId?: number;
+  paymentRecordId?: string;
+  billId: string;
+  amount: number;
+  targetAmount?: number;
+  targetCurrency?: string;
+  exchangeRate?: number;
+  fee?: number;
+  status: string;
+  message: string;
+}
+
+export interface WisePaymentStatusResult {
+  paymentRecordId: string;
+  pcBillId: string;
+  payeeName: string;
+  amount: number;
+  status: string;
+  wiseTransferId: number | null;
+  wiseStatus: string | null;
+  wiseCurrency: string | null;
+  wiseExchangeRate: number | null;
+  wiseTargetAmount: number | null;
+  wiseFee: number | null;
+  executedAt: string | null;
+  executedBy: string | null;
+  failureReason: string | null;
+  paidAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 class ApiClient {
   private async request<T>(
     endpoint: string,
@@ -459,6 +493,17 @@ class ApiClient {
 
   async getBillComPaymentStatus(paymentRecordId: string): Promise<PaymentStatusResult> {
     return this.request(`/payments/${paymentRecordId}/status`);
+  }
+
+  // Wise Payment Execution
+  async executeWisePayment(billId: string): Promise<WisePaymentExecutionResult> {
+    return this.request(`/payments/wise/execute/${billId}`, {
+      method: 'POST',
+    });
+  }
+
+  async getWisePaymentStatus(paymentRecordId: string): Promise<WisePaymentStatusResult> {
+    return this.request(`/payments/wise/${paymentRecordId}/status`);
   }
 
   async getDashboardStats(): Promise<{
