@@ -16,9 +16,11 @@ import { PaymentFilterValues, FilterOption } from './PaymentFilters';
 interface PaymentTableProps {
   filters: PaymentFilterValues;
   onFiltersLoaded?: (payees: FilterOption[], clients: FilterOption[]) => void;
+  onPaymentsLoaded?: (payments: PaymentHistoryItem[], total: number) => void;
+  globalFilter?: string;
 }
 
-export function PaymentTable({ filters, onFiltersLoaded }: PaymentTableProps) {
+export function PaymentTable({ filters, onFiltersLoaded, onPaymentsLoaded, globalFilter }: PaymentTableProps) {
   const [payments, setPayments] = useState<PaymentHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -93,12 +95,16 @@ export function PaymentTable({ filters, onFiltersLoaded }: PaymentTableProps) {
       if (onFiltersLoaded) {
         onFiltersLoaded(response.filters.payees, response.filters.clients);
       }
+      // Pass payments data up for stats/export
+      if (onPaymentsLoaded) {
+        onPaymentsLoaded(response.payments, response.total);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load payments');
     } finally {
       setLoading(false);
     }
-  }, [filters, page, pageSize, onFiltersLoaded]);
+  }, [filters, page, pageSize, onFiltersLoaded, onPaymentsLoaded]);
 
   useEffect(() => {
     fetchPayments();
@@ -185,6 +191,8 @@ export function PaymentTable({ filters, onFiltersLoaded }: PaymentTableProps) {
         dataKey="id"
         emptyMessage="No payments found"
         tableStyle={{ minWidth: '50rem' }}
+        globalFilter={globalFilter || undefined}
+        globalFilterFields={['payeeName', 'clientName', 'paymentMethod']}
       >
         <Column expander style={{ width: '3rem' }} />
         <Column field="paidDate" header="Date" body={dateTemplate} sortable style={{ width: '10rem' }} />
