@@ -94,6 +94,21 @@ export interface PaymentHistoryResponse {
   };
 }
 
+export interface DismissedBill {
+  id: string;
+  pcBillId: string;
+  reason: string;
+  dismissedBy: string;
+  dismissedAt: string;
+  payeeName: string;
+  clientName: string;
+  amount: number;
+  tenantCode: string;
+  description?: string;
+  qboInvoiceNum?: string;
+  qboBillNum?: string;
+}
+
 export interface WiseAccount {
   id: number;
   name: string;
@@ -225,6 +240,32 @@ class ApiClient {
     });
   }
 
+  // Dismissed bills
+  async dismissBill(billId: string, data: {
+    reason: string;
+    dismissedBy: string;
+    payeeName: string;
+    clientName: string;
+    amount: number;
+    tenantCode: string;
+    description?: string;
+    qboInvoiceNum?: string;
+    qboBillNum?: string;
+  }): Promise<DismissedBill> {
+    return this.request(`/bills/${billId}/dismiss`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getDismissedBills(): Promise<{ dismissed: DismissedBill[] }> {
+    return this.request('/bills/dismissed');
+  }
+
+  async restoreBill(billId: string): Promise<{ success: boolean; pcBillId: string }> {
+    return this.request(`/bills/${billId}/restore`, { method: 'POST' });
+  }
+
   logout(): void {
     window.location.href = `${AUTH_BASE}/logout`;
   }
@@ -308,6 +349,44 @@ class ApiClient {
 
   async getPaymentDetail(id: string): Promise<PaymentDetail> {
     return this.request<PaymentDetail>(`/payments/history/${id}`);
+  }
+
+  async getDashboardStats(): Promise<{
+    pendingCount: number;
+    validatedCount: number;
+    paidThisMonth: number;
+    pendingAmount: number;
+    paidAmount: number;
+  }> {
+    // Aggregate from existing endpoints
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
+      .toISOString()
+      .split('T')[0];
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+      .toISOString()
+      .split('T')[0];
+
+    const [billsResponse, paymentsResponse] = await Promise.all([
+      this.getBills({ status: 'all', tenant: 'all' }),
+      this.getPaymentHistory({
+        startDate: startOfMonth,
+        endDate: endOfMonth,
+        status: 'paid',
+        pageSize: 1,
+      }),
+    ]);
+
+    const pendingBills = billsResponse.bills.filter((b) => !b.readyToPay);
+    const validatedBills = billsResponse.bills.filter((b) => b.readyToPay);
+
+    return {
+      pendingCount: pendingBills.length,
+      validatedCount: validatedBills.length,
+      paidThisMonth: paymentsResponse.total,
+      pendingAmount: pendingBills.reduce((sum, b) => sum + b.amount, 0),
+      paidAmount: 0, // Not available from paginated response total
+    };
   }
 }
 

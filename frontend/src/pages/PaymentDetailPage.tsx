@@ -17,10 +17,6 @@ import {
   FileSpreadsheet,
   CreditCard,
   Settings2,
-  Clock,
-  CheckCircle,
-  XCircle,
-  CreditCard as CreditCardIcon,
 } from 'lucide-react';
 import { api, Bill, ControlResult, PaymentDetail } from '../lib/api';
 
@@ -522,7 +518,7 @@ export function PaymentDetailPage() {
                   <div>
                     <p className="text-sm text-muted-foreground mb-1">Payment Method</p>
                     <div className="flex items-center gap-2">
-                      <CreditCardIcon className="h-4 w-4 text-muted-foreground" />
+                      <CreditCard className="h-4 w-4 text-muted-foreground" />
                       <span className="text-sm font-medium">{paymentMethod}</span>
                     </div>
                   </div>
