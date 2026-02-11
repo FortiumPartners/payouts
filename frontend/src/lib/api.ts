@@ -134,6 +134,33 @@ export interface IntegrationStatus {
   lastChecked: string;
 }
 
+export interface ValidationRule {
+  id: string;
+  name: string;
+  ruleType: 'required_field' | 'amount_threshold' | 'approval_required' | 'duplicate_detection' | 'custom';
+  conditions: Record<string, unknown>;
+  active: boolean;
+  priority: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RuleResult {
+  ruleId: string;
+  ruleName: string;
+  ruleType: string;
+  passed: boolean;
+  reason: string;
+}
+
+export interface ValidationResult {
+  billId: string;
+  passed: boolean;
+  results: RuleResult[];
+  failedCount: number;
+  passedCount: number;
+}
+
 class ApiClient {
   private async request<T>(
     endpoint: string,
@@ -349,6 +376,46 @@ class ApiClient {
 
   async getPaymentDetail(id: string): Promise<PaymentDetail> {
     return this.request<PaymentDetail>(`/payments/history/${id}`);
+  }
+
+  // Validation Rules
+  async getValidationRules(): Promise<{ rules: ValidationRule[] }> {
+    return this.request('/rules');
+  }
+
+  async createValidationRule(data: {
+    name: string;
+    ruleType: ValidationRule['ruleType'];
+    conditions: Record<string, unknown>;
+    active?: boolean;
+    priority?: number;
+  }): Promise<ValidationRule> {
+    return this.request('/rules', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateValidationRule(
+    id: string,
+    data: Partial<Omit<ValidationRule, 'id' | 'createdAt' | 'updatedAt'>>
+  ): Promise<ValidationRule> {
+    return this.request(`/rules/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteValidationRule(id: string): Promise<{ success: boolean }> {
+    return this.request(`/rules/${id}`, { method: 'DELETE' });
+  }
+
+  async seedValidationRules(): Promise<{ message: string; count: number; rules: ValidationRule[] }> {
+    return this.request('/rules/seed', { method: 'POST' });
+  }
+
+  async validateBill(billId: string): Promise<ValidationResult> {
+    return this.request(`/bills/${billId}/validate`, { method: 'POST' });
   }
 
   async getDashboardStats(): Promise<{

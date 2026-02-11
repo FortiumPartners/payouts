@@ -10,6 +10,7 @@
  * - custom: Evaluates a custom condition expression
  */
 
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import type { ValidationRule } from '@prisma/client';
 
@@ -374,7 +375,7 @@ export async function seedDefaultRules(): Promise<void> {
       data: {
         name: rule.name,
         ruleType: rule.ruleType,
-        conditions: rule.conditions,
+        conditions: rule.conditions as Prisma.InputJsonValue,
         active: true,
         priority: rule.priority,
       },

@@ -5,6 +5,7 @@
 
 import { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth } from './auth.js';
 import {
@@ -100,7 +101,7 @@ export const validationRulesRoutes: FastifyPluginAsync = async (fastify) => {
       data: {
         name: body.name,
         ruleType: body.ruleType,
-        conditions: body.conditions,
+        conditions: body.conditions as Prisma.InputJsonValue,
         active: body.active,
         priority: body.priority,
       },
@@ -157,7 +158,7 @@ export const validationRulesRoutes: FastifyPluginAsync = async (fastify) => {
       data: {
         ...(body.name !== undefined && { name: body.name }),
         ...(body.ruleType !== undefined && { ruleType: body.ruleType }),
-        ...(body.conditions !== undefined && { conditions: body.conditions }),
+        ...(body.conditions !== undefined && { conditions: body.conditions as Prisma.InputJsonValue }),
         ...(body.active !== undefined && { active: body.active }),
         ...(body.priority !== undefined && { priority: body.priority }),
       },

@@ -1,8 +1,9 @@
 import { Routes, Route, Navigate, Link } from 'react-router-dom';
-import { DollarSign, RefreshCw, LogOut, Loader2, AlertCircle, CheckCircle, Settings, History, ChevronDown, ChevronUp, RotateCcw, ListChecks } from 'lucide-react';
+import { DollarSign, RefreshCw, LogOut, Loader2, AlertCircle, CheckCircle, Settings, History, ChevronDown, ChevronUp, RotateCcw, ListChecks, Shield } from 'lucide-react';
 import { PaymentHistoryPage } from './pages/PaymentHistoryPage';
 import { PaymentQueuePage } from './pages/PaymentQueuePage';
 import { PaymentDetailPage } from './pages/PaymentDetailPage';
+import { ValidationRulesPage } from './pages/ValidationRulesPage';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { useBills } from './hooks/useBills';
 import { useBillControls } from './hooks/useBillControls';
@@ -219,6 +220,14 @@ function Dashboard() {
             >
               <Settings className="h-4 w-4" />
               Wise Recipients
+            </Link>
+            <Link
+              to="/validation-rules"
+              className="flex items-center gap-2 px-4 py-2 rounded-md border hover:bg-muted"
+              title="Manage Validation Rules"
+            >
+              <Shield className="h-4 w-4" />
+              Rules
             </Link>
             <button
               onClick={handleRefresh}
@@ -650,6 +659,14 @@ function App() {
           element={
             <ProtectedRoute>
               <WiseRecipientsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/validation-rules"
+          element={
+            <ProtectedRoute>
+              <ValidationRulesPage />
             </ProtectedRoute>
           }
         />
