@@ -88,16 +88,24 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
       // Fetch payable bills from PartnerConnect
       const rawBills = await pcClient.getPayableBills();
 
-      // Get already-paid bills to filter them out
-      const paidRecords = await prisma.paymentRecord.findMany({
-        where: { status: 'paid' },
-        select: { pcBillId: true },
-      });
-      const paidBillIds = new Set(paidRecords.map(p => p.pcBillId));
+      // Get already-paid and dismissed bills to filter them out
+      const [paidRecords, dismissedRecords] = await Promise.all([
+        prisma.paymentRecord.findMany({
+          where: { status: 'paid' },
+          select: { pcBillId: true },
+        }),
+        prisma.dismissedBill.findMany({
+          select: { pcBillId: true },
+        }),
+      ]);
+      const excludedIds = new Set([
+        ...paidRecords.map(p => p.pcBillId),
+        ...dismissedRecords.map(d => d.pcBillId),
+      ]);
 
-      // Filter out bills that have already been paid
-      const unpaidBills = rawBills.filter(b => !paidBillIds.has(b.uid));
-      fastify.log.info({ total: rawBills.length, paid: paidBillIds.size, unpaid: unpaidBills.length }, 'Bills filtered');
+      // Filter out bills that have already been paid or dismissed
+      const unpaidBills = rawBills.filter(b => !excludedIds.has(b.uid));
+      fastify.log.info({ total: rawBills.length, excluded: excludedIds.size, unpaid: unpaidBills.length }, 'Bills filtered');
 
       // Get tenants for proving period config
       const tenants = await prisma.tenant.findMany();
@@ -154,6 +162,121 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
         statusCode: 500,
       });
     }
+  });
+
+  /**
+   * GET /api/bills/dismissed - List all dismissed bills
+   */
+  fastify.get('/dismissed', async () => {
+    const dismissed = await prisma.dismissedBill.findMany({
+      orderBy: { dismissedAt: 'desc' },
+    });
+    return {
+      dismissed: dismissed.map(d => ({
+        ...d,
+        amount: Number(d.amount),
+      })),
+    };
+  });
+
+  /**
+   * POST /api/bills/:id/dismiss - Dismiss a bill from the active queue
+   */
+  fastify.post('/:id/dismiss', {
+    schema: {
+      params: z.object({ id: z.string() }),
+      body: z.object({
+        reason: z.string().min(1, 'Reason is required'),
+      }),
+    },
+  }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { reason } = request.body as { reason: string };
+    const user = (request as { user?: { email?: string } }).user;
+    const dismissedBy = user?.email || 'unknown';
+
+    // Check if already paid
+    const existingPayment = await prisma.paymentRecord.findFirst({
+      where: { pcBillId: id, status: 'paid' },
+    });
+    if (existingPayment) {
+      return reply.status(409).send({
+        error: 'Cannot dismiss a paid bill',
+        message: `Bill ${id} has already been paid`,
+        statusCode: 409,
+      });
+    }
+
+    // Check if already dismissed
+    const existingDismissal = await prisma.dismissedBill.findUnique({
+      where: { pcBillId: id },
+    });
+    if (existingDismissal) {
+      return reply.status(409).send({
+        error: 'Bill already dismissed',
+        message: `Bill ${id} was already dismissed by ${existingDismissal.dismissedBy}`,
+        statusCode: 409,
+      });
+    }
+
+    // Fetch bill data for the snapshot
+    const pcClient = getPartnerConnectClient();
+    const bill = await pcClient.getBill(id);
+    const isCanada = ['CA', 'CAN', 'Canada'].includes(bill.tenantCode);
+
+    const dismissed = await prisma.dismissedBill.create({
+      data: {
+        pcBillId: id,
+        reason,
+        dismissedBy,
+        payeeName: bill.resourceName,
+        clientName: bill.clientName,
+        amount: bill.adjustedBillPayment,
+        tenantCode: isCanada ? 'CA' : 'US',
+        description: bill.description || null,
+        qboInvoiceNum: bill.externalInvoiceDocNum || null,
+        qboBillNum: bill.externalBillDocNum || null,
+      },
+    });
+
+    fastify.log.info({ billId: id, dismissedBy, reason }, 'Bill dismissed');
+
+    return {
+      ...dismissed,
+      amount: Number(dismissed.amount),
+    };
+  });
+
+  /**
+   * POST /api/bills/:id/restore - Restore a dismissed bill to the active queue
+   */
+  fastify.post('/:id/restore', {
+    schema: {
+      params: z.object({ id: z.string() }),
+    },
+  }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+
+    const dismissed = await prisma.dismissedBill.findUnique({
+      where: { pcBillId: id },
+    });
+
+    if (!dismissed) {
+      return reply.status(404).send({
+        error: 'Not found',
+        message: `No dismissed bill with ID: ${id}`,
+        statusCode: 404,
+      });
+    }
+
+    await prisma.dismissedBill.delete({
+      where: { pcBillId: id },
+    });
+
+    const user = (request as { user?: { email?: string } }).user;
+    fastify.log.info({ billId: id, restoredBy: user?.email }, 'Bill restored');
+
+    return { success: true, billId: id };
   });
 
   /**

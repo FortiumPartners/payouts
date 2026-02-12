@@ -50,6 +50,21 @@ export interface User {
   picture?: string;
 }
 
+export interface DismissedBill {
+  id: string;
+  pcBillId: string;
+  reason: string;
+  dismissedBy: string;
+  dismissedAt: string;
+  payeeName: string;
+  clientName: string;
+  amount: number;
+  tenantCode: string;
+  description: string | null;
+  qboInvoiceNum: string | null;
+  qboBillNum: string | null;
+}
+
 export interface WiseRecipient {
   id: string;
   qboVendorId: string;
@@ -183,6 +198,24 @@ class ApiClient {
     return this.request('/bills/check-controls', {
       method: 'POST',
       body: JSON.stringify({ billIds }),
+    });
+  }
+
+  // Dismissed Bills
+  async dismissBill(billId: string, data: { reason: string }): Promise<DismissedBill> {
+    return this.request(`/bills/${billId}/dismiss`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getDismissedBills(): Promise<{ dismissed: DismissedBill[] }> {
+    return this.request('/bills/dismissed');
+  }
+
+  async restoreBill(billId: string): Promise<{ success: boolean; billId: string }> {
+    return this.request(`/bills/${billId}/restore`, {
+      method: 'POST',
     });
   }
 

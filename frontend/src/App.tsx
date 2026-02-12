@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate, Link } from 'react-router-dom';
-import { DollarSign, RefreshCw, LogOut, Loader2, AlertCircle, CheckCircle, Settings, History } from 'lucide-react';
+import { DollarSign, RefreshCw, LogOut, Loader2, AlertCircle, CheckCircle, Settings, History, ChevronUp, ChevronDown } from 'lucide-react';
 import { PaymentHistoryPage } from './pages/PaymentHistoryPage';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { useBills } from './hooks/useBills';
@@ -8,8 +8,9 @@ import { BillsList, ViewModeToggle, ViewMode } from './components/BillsList';
 import { PaymentConfirmationModal } from './components/PaymentConfirmationModal';
 import { WiseRecipientsPage } from './components/WiseRecipientsPage';
 import { IntegrationStatusPanel } from './components/IntegrationStatus';
-import { Bill, api, getAuthUrl } from './lib/api';
-import { useState } from 'react';
+import { DismissConfirmationModal } from './components/DismissConfirmationModal';
+import { Bill, DismissedBill, api, getAuthUrl } from './lib/api';
+import { useState, useEffect } from 'react';
 
 function Dashboard() {
   const { user, logout } = useAuth();
@@ -26,6 +27,60 @@ function Dashboard() {
     billId: string | null;
   }>({ loading: false, success: null, message: null, billId: null });
   const [pendingPaymentBill, setPendingPaymentBill] = useState<Bill | null>(null);
+  const [pendingDismissBill, setPendingDismissBill] = useState<Bill | null>(null);
+  const [showDismissed, setShowDismissed] = useState(false);
+  const [dismissedBills, setDismissedBills] = useState<DismissedBill[]>([]);
+
+  const loadDismissedBills = async () => {
+    try {
+      const result = await api.getDismissedBills();
+      setDismissedBills(result.dismissed);
+    } catch {
+      // Silently fail — dismissed bills are secondary
+    }
+  };
+
+  useEffect(() => {
+    loadDismissedBills();
+  }, []);
+
+  const handleDismissBill = (bill: Bill) => {
+    setPendingDismissBill(bill);
+  };
+
+  const handleConfirmDismiss = async (reason: string) => {
+    const bill = pendingDismissBill;
+    if (!bill) return;
+    setPendingDismissBill(null);
+
+    try {
+      await api.dismissBill(bill.uid, { reason });
+      await refresh();
+      await loadDismissedBills();
+    } catch (err) {
+      setPaymentStatus({
+        loading: false,
+        success: false,
+        message: err instanceof Error ? err.message : 'Failed to dismiss bill',
+        billId: bill.uid,
+      });
+    }
+  };
+
+  const handleRestoreBill = async (pcBillId: string) => {
+    try {
+      await api.restoreBill(pcBillId);
+      await refresh();
+      await loadDismissedBills();
+    } catch (err) {
+      setPaymentStatus({
+        loading: false,
+        success: false,
+        message: err instanceof Error ? err.message : 'Failed to restore bill',
+        billId: pcBillId,
+      });
+    }
+  };
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -282,8 +337,79 @@ function Dashboard() {
             viewMode={viewMode}
             controlStates={controlStates}
             onPayBill={handlePayBill}
+            onDismissBill={handleDismissBill}
           />
         </div>
+
+        {/* Dismissed Bills Section */}
+        {dismissedBills.length > 0 && (
+          <div className="rounded-lg border bg-card mt-6">
+            <button
+              onClick={() => setShowDismissed(!showDismissed)}
+              className="w-full border-b px-6 py-4 flex items-center justify-between hover:bg-muted/50"
+            >
+              <h2 className="font-semibold text-muted-foreground">
+                Dismissed Bills ({dismissedBills.length})
+              </h2>
+              {showDismissed ? (
+                <ChevronUp className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              )}
+            </button>
+            {showDismissed && (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-muted/50">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-sm font-medium">Tenant</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium">Client</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium">Payee</th>
+                      <th className="px-4 py-3 text-right text-sm font-medium">Amount</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium">Reason</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium">Dismissed By</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium">Date</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dismissedBills.map((d) => (
+                      <tr key={d.id} className="border-b hover:bg-muted/50">
+                        <td className="px-4 py-3">
+                          <span className={`text-xs px-2 py-1 rounded font-medium ${
+                            d.tenantCode === 'US' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'
+                          }`}>
+                            {d.tenantCode}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-sm">{d.clientName}</td>
+                        <td className="px-4 py-3 text-sm">{d.payeeName}</td>
+                        <td className="px-4 py-3 text-right font-medium">
+                          {formatAmount(d.amount)}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-muted-foreground max-w-xs truncate" title={d.reason}>
+                          {d.reason}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-muted-foreground">{d.dismissedBy}</td>
+                        <td className="px-4 py-3 text-sm text-muted-foreground">
+                          {new Date(d.dismissedAt).toLocaleDateString()}
+                        </td>
+                        <td className="px-4 py-3">
+                          <button
+                            onClick={() => handleRestoreBill(d.pcBillId)}
+                            className="px-3 py-1 rounded text-sm font-medium bg-green-100 text-green-700 hover:bg-green-200"
+                          >
+                            Restore
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
       </main>
 
       {/* Payment confirmation modal */}
@@ -291,6 +417,13 @@ function Dashboard() {
         bill={pendingPaymentBill}
         onConfirm={handleConfirmPayment}
         onCancel={handleCancelPayment}
+      />
+
+      {/* Dismiss confirmation modal */}
+      <DismissConfirmationModal
+        bill={pendingDismissBill}
+        onConfirm={handleConfirmDismiss}
+        onCancel={() => setPendingDismissBill(null)}
       />
     </div>
   );
