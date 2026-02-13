@@ -25,6 +25,7 @@ export interface FortiumClaims extends JWTPayload {
   fortium_user_id: string;
   email: string;
   email_verified: boolean;
+  nonce?: string;
   name?: string;
   given_name?: string;
   family_name?: string;
