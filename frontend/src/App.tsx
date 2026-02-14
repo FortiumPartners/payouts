@@ -30,6 +30,7 @@ function Dashboard() {
   const [pendingDismissBill, setPendingDismissBill] = useState<Bill | null>(null);
   const [showDismissed, setShowDismissed] = useState(false);
   const [dismissedBills, setDismissedBills] = useState<DismissedBill[]>([]);
+  const [apiStartedAt, setApiStartedAt] = useState<string | null>(null);
 
   const loadDismissedBills = async () => {
     try {
@@ -42,6 +43,7 @@ function Dashboard() {
 
   useEffect(() => {
     loadDismissedBills();
+    fetch('/api/health').then(r => r.json()).then(d => setApiStartedAt(d.startedAt)).catch(() => {});
   }, []);
 
   const handleDismissBill = (bill: Bill) => {
@@ -421,7 +423,8 @@ function Dashboard() {
 
       {/* Build info */}
       <div className="text-center text-xs text-gray-400 py-2">
-        Build: {new Date(__BUILD_TIME__).toLocaleString()}
+        UI: {new Date(__BUILD_TIME__).toLocaleString()}
+        {apiStartedAt && <> · API: {new Date(apiStartedAt).toLocaleString()}</>}
       </div>
 
       {/* Dismiss confirmation modal */}

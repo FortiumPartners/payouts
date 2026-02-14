@@ -2,6 +2,8 @@ import { FastifyPluginAsync } from 'fastify';
 import { healthResponseSchema, HealthResponse } from '../schemas/common.js';
 import { prisma } from '../lib/prisma.js';
 
+const SERVER_START_TIME = new Date().toISOString();
+
 export const healthRoutes: FastifyPluginAsync = async (fastify) => {
   // Basic health check
   fastify.get('/health', {
@@ -15,6 +17,7 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
       status: 'healthy',
       service: 'payouts-api',
       timestamp: new Date().toISOString(),
+      startedAt: SERVER_START_TIME,
     };
   });
 

@@ -6,6 +6,7 @@ export const healthResponseSchema = z.object({
   service: z.string(),
   timestamp: z.string().datetime(),
   database: z.enum(['connected', 'disconnected']).optional(),
+  startedAt: z.string().datetime().optional(),
 });
 
 export const errorResponseSchema = z.object({
