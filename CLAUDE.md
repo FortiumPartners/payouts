@@ -78,12 +78,12 @@ docker compose exec api npx prisma db push
 | Service | URL |
 |---------|-----|
 | API | https://payouts-czsw.onrender.com |
-| Frontend | https://payouts-prod-frontend.onrender.com |
+| Frontend | https://payouts-frontend.onrender.com |
 | Database | `payouts` db on `fortium-render-production-postgres` |
 
 ### Service IDs
 - `srv-d5fbvlshg0os73f6p98g` - payouts-prod-api
-- `srv-d5fdap24d50c73f2lqb0` - payouts-prod-frontend
+- `srv-d62botshg0os738btr40` - payouts-frontend
 
 **Required env vars for production:**
 - `DATABASE_URL` - Render Postgres internal connection string
