@@ -473,69 +473,66 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
 
         if (isWiseToWise) {
           // ---------------------------------------------------------------
-          // WISE-TO-WISE TRANSFER (using email recipient)
+          // WISE-TO-WISE TRANSFER (direct to recipient's Wise balance)
           // ---------------------------------------------------------------
-          // For Wise-to-Wise contacts, we create an email-type recipient.
-          // When the recipient has a Wise account linked to that email,
-          // funds go directly to their Wise balance.
+          // Embed targetContactId in the quote so funds go directly
+          // to their Wise balance — no claim link needed.
 
-          // Check if we have a valid email (not placeholder text)
-          const hasValidEmail = recipient.wiseEmail &&
-            !recipient.wiseEmail.toLowerCase().includes('wise account') &&
-            !recipient.wiseEmail.toLowerCase().includes('wise business');
+          fastify.log.info({
+            contactUuid: recipient.wiseContactId,
+            payeeName: bill.resourceName,
+          }, 'Using Wise-to-Wise transfer');
 
-          if (!hasValidEmail) {
-            return reply.status(400).send({
-              success: false,
-              billId,
-              amount: bill.adjustedBillPayment,
-              status: 'missing_email',
-              message: `Wise-to-Wise recipient "${bill.resourceName}" needs an email address configured. Update their Wise recipient record with their email.`,
-            });
-          }
+          // Create quote with targetContactId embedded
+          quote = await wise.createQuote(
+            'CAD',
+            recipient.targetCurrency,
+            bill.adjustedBillPayment,
+            recipient.wiseContactId! // Wise-to-Wise: contact UUID in the quote
+          );
 
-          // Check if we already have a cached recipient account ID
+          // Create transfer from quote (no targetAccount needed)
+          transfer = await wise.createTransferFromQuote(quote.id, reference);
+        } else if (recipient.wiseEmail &&
+          !recipient.wiseEmail.toLowerCase().includes('wise account') &&
+          !recipient.wiseEmail.toLowerCase().includes('wise business')) {
+          // ---------------------------------------------------------------
+          // EMAIL RECIPIENT TRANSFER (fallback when no Wise-to-Wise contact)
+          // ---------------------------------------------------------------
+          // Recipient doesn't have a Wise account linked — send via email.
+          // They'll get a link to claim the payment.
+
           let emailRecipientId = recipient.wiseRecipientAccountId;
 
           if (emailRecipientId) {
             fastify.log.info({
               cachedAccountId: emailRecipientId,
               payeeName: bill.resourceName,
-            }, 'Using cached Wise recipient account ID');
+            }, 'Using cached email recipient account ID');
           } else {
-            // Create email recipient and cache the ID for future use
             fastify.log.info({
-              contactUuid: recipient.wiseContactId,
               email: recipient.wiseEmail,
               payeeName: bill.resourceName,
-            }, 'Creating new Wise email recipient');
+            }, 'Creating email recipient (no Wise-to-Wise contact)');
 
             emailRecipientId = await wise.createEmailRecipient(
               bill.resourceName,
-              recipient.wiseEmail!,
+              recipient.wiseEmail,
               recipient.targetCurrency
             );
 
-            // Cache the recipient ID for future payments
             await prisma.wiseRecipient.update({
               where: { qboVendorId: bill.qboVendorId },
               data: { wiseRecipientAccountId: emailRecipientId },
             });
-
-            fastify.log.info({
-              emailRecipientId,
-              payeeName: bill.resourceName,
-            }, 'Cached Wise recipient account ID');
           }
 
-          // Create quote (CAD -> target currency)
           quote = await wise.createQuote(
             'CAD',
             recipient.targetCurrency,
             bill.adjustedBillPayment
           );
 
-          // Create transfer with the email recipient's numeric ID
           transfer = await wise.createTransfer(quote.id, emailRecipientId, reference);
         } else {
           // ---------------------------------------------------------------
