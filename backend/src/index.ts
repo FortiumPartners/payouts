@@ -59,7 +59,7 @@ async function main() {
   });
 
   // Routes
-  await fastify.register(healthRoutes);
+  await fastify.register(healthRoutes, { prefix: '/api' });
   await fastify.register(authRoutes, { prefix: '/auth' });
   await fastify.register(billsRoutes, { prefix: '/api/bills' });
   await fastify.register(paymentsRoutes, { prefix: '/api/payments' });
