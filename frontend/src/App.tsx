@@ -419,6 +419,11 @@ function Dashboard() {
         onCancel={handleCancelPayment}
       />
 
+      {/* Build info */}
+      <div className="text-center text-xs text-gray-400 py-2">
+        Build: {new Date(__BUILD_TIME__).toLocaleString()}
+      </div>
+
       {/* Dismiss confirmation modal */}
       <DismissConfirmationModal
         bill={pendingDismissBill}
