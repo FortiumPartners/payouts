@@ -25,7 +25,7 @@
     "@fastify/oauth2": "^7.8.0",
     "@fastify/swagger": "^8.14.0",
     "@fastify/swagger-ui": "^3.0.0",
-    "@fortium/identity-client": "https://github.com/FortiumPartners/identity-client/tarball/d0bed73",
+    "@fortium/identity-client": "https://github.com/FortiumPartners/identity-client/tarball/main",
     "@prisma/client": "^5.10.0",
     "fastify": "^4.26.0",
     "fastify-type-provider-zod": "^1.1.9",
