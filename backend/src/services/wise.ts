@@ -520,6 +520,44 @@ export class WiseClient {
   }
 
   /**
+   * Discover a Wise contact by email using the Contact Discovery API.
+   * This finds an existing Wise profile by identifier and creates a proper
+   * contact linkage — enabling direct Wise-to-Wise transfers (no claim links).
+   *
+   * @param email The email address to discover
+   * @returns The discovered contact with its UUID, or null if not found
+   */
+  async discoverContact(email: string): Promise<{ id: string; name: string } | null> {
+    const profileId = await this.getBusinessProfileId();
+
+    console.log(`[Wise] Discovering contact by email: ${email}`);
+
+    try {
+      const contact = await this.request<{
+        id: string;
+        name: string;
+        active: boolean;
+      }>('POST', `/v2/profiles/${profileId}/contacts?isDirectIdentifierCreation=true`, {
+        identifier: {
+          type: 'EMAIL',
+          value: email,
+        },
+      });
+
+      if (contact) {
+        console.log(`[Wise] Discovered contact: ${contact.name} (${contact.id})`);
+        return { id: contact.id, name: contact.name };
+      }
+
+      console.log(`[Wise] No Wise account found for email: ${email}`);
+      return null;
+    } catch (err) {
+      console.log(`[Wise] Contact discovery failed for ${email}:`, err);
+      return null;
+    }
+  }
+
+  /**
    * Find an existing v1/accounts entry by account holder name (fuzzy match).
    * Useful for matching v2/contacts to their v1/accounts entry.
    *
