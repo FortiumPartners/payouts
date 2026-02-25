@@ -441,6 +441,13 @@ function Login() {
   const params = new URLSearchParams(window.location.search);
   const error = params.get('error');
   const rejectedEmail = params.get('email');
+  const switchAccount = params.get('switch');
+
+  // After OIDC logout completes, auto-redirect to login with account picker
+  if (switchAccount === '1') {
+    window.location.href = getAuthUrl('/login?prompt=select_account');
+    return null;
+  }
 
   // Track which Google account Identity last saw.
   // Persisted in localStorage so it survives page reloads.

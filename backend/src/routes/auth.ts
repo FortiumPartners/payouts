@@ -74,18 +74,38 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
 
   /**
    * GET /auth/switch-account
-   * Clears local Payouts session cookies, then starts a fresh OIDC login
-   * with prompt=select_account to force Google's account picker.
+   * Clears both Payouts AND Identity sessions, then returns to login
+   * with a flag that auto-triggers sign-in with the Google account picker.
+   *
+   * Flow: switch-account → GET /auth/logout → Identity OIDC logout →
+   *       /login?switch=1 → (frontend auto-redirects) → /auth/login?prompt=select_account
    */
-  fastify.get('/switch-account', async (_request, reply) => {
-    // Clear all local auth cookies so the OIDC flow starts fresh
+  fastify.get('/switch-account', async (request, reply) => {
+    // Delegate to the GET /auth/logout handler from identity-client.
+    // It clears local cookies AND redirects through Identity's OIDC logout.
+    // Override the post-logout redirect to include switch=1 flag.
+    // Try to read the id_token for a cleaner OIDC logout
+    let idTokenCookie: string | null = null;
+    try {
+      const raw = request.cookies['id_token'];
+      if (raw) {
+        const unsigned = request.unsignCookie(raw);
+        if (unsigned.valid && unsigned.value) idTokenCookie = unsigned.value;
+      }
+    } catch { /* ignore */ }
+
     reply.clearCookie('auth_token', { path: '/' });
     reply.clearCookie('id_token', { path: '/' });
     reply.clearCookie('refresh_token', { path: '/' });
+    reply.clearCookie('oidc_state', { path: '/' });
 
-    // Redirect to our own /auth/login with prompt=select_account.
-    // identity-client passes prompt through to Identity → Google.
-    reply.redirect('/auth/login?prompt=select_account');
+    // Build Identity OIDC logout URL with post_logout_redirect_uri including switch flag
+    const postLogoutUri = `${config.FRONTEND_URL}/login?switch=1`;
+    const logoutUrl = `${config.IDENTITY_ISSUER}/session/end?${
+      idTokenCookie ? `id_token_hint=${encodeURIComponent(idTokenCookie)}&` : ''
+    }post_logout_redirect_uri=${encodeURIComponent(postLogoutUri)}`;
+
+    reply.redirect(logoutUrl);
   });
 
   /**
