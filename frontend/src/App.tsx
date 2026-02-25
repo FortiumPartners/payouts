@@ -498,13 +498,13 @@ function Login() {
               </div>
               {error === 'not_authorized' && (
                 <a
-                  href={getAuthUrl('/logout')}
+                  href={getAuthUrl('/switch-account')}
                   className="mt-3 flex items-center justify-center gap-2 w-full px-3 py-2 text-sm text-red-700 hover:text-red-800 hover:bg-red-100 rounded-md transition-colors"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
                   </svg>
-                  Sign out &amp; use a different account
+                  Use a different Google account
                 </a>
               )}
             </div>
@@ -512,7 +512,7 @@ function Login() {
 
           {/* Sign in button */}
           <a
-            href={getAuthUrl(error === 'not_authorized' ? '/logout' : '/login')}
+            href={getAuthUrl(error === 'not_authorized' ? '/switch-account' : '/login')}
             className="flex items-center justify-center gap-3 w-full px-4 py-3 bg-white border-2 border-gray-200 rounded-lg hover:border-gray-300 hover:bg-gray-50 transition-all group"
           >
             <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -524,7 +524,7 @@ function Login() {
           </a>
           <div className="text-center mt-2">
             <a
-              href={getAuthUrl('/login?prompt=select_account')}
+              href={getAuthUrl('/switch-account')}
               className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
             >
               Sign in with a different account
