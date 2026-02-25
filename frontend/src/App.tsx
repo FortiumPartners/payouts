@@ -443,9 +443,10 @@ function Login() {
   const rejectedEmail = params.get('email');
   const switchAccount = params.get('switch');
 
-  // After OIDC logout completes, auto-redirect to login with account picker
+  // After Identity session cleared, auto-start fresh login.
+  // Identity defaults to prompt=select_account for Google OAuth.
   if (switchAccount === '1') {
-    window.location.href = getAuthUrl('/login?prompt=select_account');
+    window.location.href = getAuthUrl('/login');
     return null;
   }
 
