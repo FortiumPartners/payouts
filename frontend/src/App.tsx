@@ -442,6 +442,16 @@ function Login() {
   const error = params.get('error');
   const rejectedEmail = params.get('email');
 
+  // Track which Google account Identity last saw.
+  // Persisted in localStorage so it survives page reloads.
+  const knownEmail = (() => {
+    if (rejectedEmail) {
+      localStorage.setItem('lastIdentityEmail', rejectedEmail);
+      return rejectedEmail;
+    }
+    return localStorage.getItem('lastIdentityEmail');
+  })();
+
   const errorMessages: Record<string, string> = {
     oauth_failed: 'Sign-in failed. Please try again.',
     invalid_state: 'Session expired. Please try again.',
@@ -510,6 +520,14 @@ function Login() {
             </div>
           )}
 
+          {/* Current account indicator */}
+          {knownEmail && !error && (
+            <div className="mb-4 p-3 rounded-lg bg-gray-50 border border-gray-200 text-center">
+              <p className="text-xs text-gray-500 mb-1">Signed in to Google as</p>
+              <p className="text-sm font-medium text-gray-700">{knownEmail}</p>
+            </div>
+          )}
+
           {/* Sign in button */}
           <a
             href={getAuthUrl(error === 'not_authorized' ? '/switch-account' : '/login')}
@@ -520,14 +538,16 @@ function Login() {
               <polyline points="10 17 15 12 10 7" />
               <line x1="15" y1="12" x2="3" y2="12" />
             </svg>
-            <span className="text-gray-700 font-medium">Sign in</span>
+            <span className="text-gray-700 font-medium">
+              {knownEmail ? `Sign in as ${knownEmail}` : 'Sign in'}
+            </span>
           </a>
           <div className="text-center mt-2">
             <a
               href={getAuthUrl('/switch-account')}
               className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
             >
-              Sign in with a different account
+              {knownEmail ? 'Use a different account' : 'Sign in with a different account'}
             </a>
           </div>
 

@@ -23,6 +23,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const currentUser = await api.getCurrentUser();
       setUser(currentUser);
+      if (currentUser?.email) {
+        localStorage.setItem('lastIdentityEmail', currentUser.email);
+      }
     } catch {
       setUser(null);
     } finally {
