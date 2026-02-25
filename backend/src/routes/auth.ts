@@ -74,15 +74,18 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
 
   /**
    * GET /auth/switch-account
-   * Redirects to Identity's switch-account endpoint which clears the session
-   * and forces Google's account picker in a single redirect flow.
+   * Clears local Payouts session cookies, then starts a fresh OIDC login
+   * with prompt=select_account to force Google's account picker.
    */
   fastify.get('/switch-account', async (_request, reply) => {
-    // Identity issuer is like https://identity.fortiumsoftware.com/oidc
-    // switch-account lives at https://identity.fortiumsoftware.com/auth/switch-account
-    const identityBase = config.IDENTITY_ISSUER.replace(/\/oidc$/, '');
-    const returnTo = encodeURIComponent('/login');
-    reply.redirect(`${identityBase}/auth/switch-account?client_id=${config.IDENTITY_CLIENT_ID}&return_to=${returnTo}`);
+    // Clear all local auth cookies so the OIDC flow starts fresh
+    reply.clearCookie('auth_token', { path: '/' });
+    reply.clearCookie('id_token', { path: '/' });
+    reply.clearCookie('refresh_token', { path: '/' });
+
+    // Redirect to our own /auth/login with prompt=select_account.
+    // identity-client passes prompt through to Identity → Google.
+    reply.redirect('/auth/login?prompt=select_account');
   });
 
   /**
