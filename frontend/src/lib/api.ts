@@ -258,8 +258,23 @@ class ApiClient {
     });
   }
 
-  logout(): void {
-    window.location.href = `${AUTH_BASE}/logout`;
+  async logout(): Promise<void> {
+    try {
+      const response = await fetch(`${AUTH_BASE}/logout`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.logoutUrl) {
+          window.location.href = data.logoutUrl;
+          return;
+        }
+      }
+    } catch {
+      // Fall through to redirect
+    }
+    window.location.href = '/';
   }
 
   // Wise Recipients
