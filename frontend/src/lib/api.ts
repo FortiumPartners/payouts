@@ -45,9 +45,11 @@ export interface BillsResponse {
 }
 
 export interface User {
+  id: string;           // fortium_user_id
   email: string;
   name?: string;
-  picture?: string;
+  permissions?: string[];
+  lastLoginAt?: string;
 }
 
 export interface DismissedBill {
@@ -55,6 +57,7 @@ export interface DismissedBill {
   pcBillId: string;
   reason: string;
   dismissedBy: string;
+  dismissedByName?: string;
   dismissedAt: string;
   payeeName: string;
   clientName: string;

@@ -170,11 +170,13 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get('/dismissed', async () => {
     const dismissed = await prisma.dismissedBill.findMany({
       orderBy: { dismissedAt: 'desc' },
+      include: { dismissedByUser: { select: { email: true, name: true } } },
     });
     return {
       dismissed: dismissed.map(d => ({
         ...d,
         amount: Number(d.amount),
+        dismissedByName: d.dismissedByUser?.name || d.dismissedByUser?.email || d.dismissedBy,
       })),
     };
   });
@@ -192,8 +194,7 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const { reason } = request.body as { reason: string };
-    const user = (request as { user?: { email?: string } }).user;
-    const dismissedBy = user?.email || 'unknown';
+    const dismissedBy = (request as any).userId || 'unknown';
 
     // Check if already paid
     const existingPayment = await prisma.paymentRecord.findFirst({
@@ -273,8 +274,7 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
       where: { pcBillId: id },
     });
 
-    const user = (request as { user?: { email?: string } }).user;
-    fastify.log.info({ billId: id, restoredBy: user?.email }, 'Bill restored');
+    fastify.log.info({ billId: id, restoredBy: (request as any).userId }, 'Bill restored');
 
     return { success: true, billId: id };
   });

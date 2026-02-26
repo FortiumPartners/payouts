@@ -172,7 +172,7 @@ function Dashboard() {
           </div>
           <div className="flex items-center gap-4">
             {user && (
-              <span className="text-sm text-muted-foreground">{user.email}</span>
+              <span className="text-sm text-muted-foreground">{user.name || user.email}</span>
             )}
             <Link
               to="/payment-history"
@@ -392,7 +392,7 @@ function Dashboard() {
                         <td className="px-4 py-3 text-sm text-muted-foreground max-w-xs truncate" title={d.reason}>
                           {d.reason}
                         </td>
-                        <td className="px-4 py-3 text-sm text-muted-foreground">{d.dismissedBy}</td>
+                        <td className="px-4 py-3 text-sm text-muted-foreground">{d.dismissedByName || d.dismissedBy}</td>
                         <td className="px-4 py-3 text-sm text-muted-foreground">
                           {new Date(d.dismissedAt).toLocaleDateString()}
                         </td>
@@ -441,14 +441,6 @@ function Login() {
   const params = new URLSearchParams(window.location.search);
   const error = params.get('error');
   const rejectedEmail = params.get('email');
-  const switchAccount = params.get('switch');
-
-  // After Identity session cleared, auto-start fresh login.
-  // Identity defaults to prompt=select_account for Google OAuth.
-  if (switchAccount === '1') {
-    window.location.href = getAuthUrl('/login');
-    return null;
-  }
 
   // Track which Google account Identity last saw.
   // Persisted in localStorage so it survives page reloads.
@@ -460,6 +452,8 @@ function Login() {
     return localStorage.getItem('lastIdentityEmail');
   })();
 
+  const isNotAuthorized = error === 'not_authorized';
+
   const errorMessages: Record<string, string> = {
     oauth_failed: 'Sign-in failed. Please try again.',
     invalid_state: 'Session expired. Please try again.',
@@ -468,8 +462,8 @@ function Login() {
     userinfo_failed: 'Failed to get user info. Please try again.',
     invalid_domain: 'Only @fortiumpartners.com accounts are allowed.',
     not_authorized: rejectedEmail
-      ? `${rejectedEmail} is not authorized for Payouts. Try a different account, or contact an administrator.`
-      : 'Your account is not authorized. Contact an administrator to be added.',
+      ? `${rejectedEmail} does not have access to Payouts.`
+      : 'Your account is not authorized. Contact an administrator.',
     auth_failed: 'Authentication failed. Please try again.',
     state_missing: 'Session expired. Please try again.',
     state_invalid: 'Invalid session. Please try again.',
@@ -507,57 +501,70 @@ function Login() {
 
           {/* Error message */}
           {error && (
-            <div className="mb-6 p-4 rounded-lg bg-red-50 border border-red-100">
+            <div className={`mb-6 p-4 rounded-lg ${isNotAuthorized ? 'bg-amber-50 border border-amber-200' : 'bg-red-50 border border-red-100'}`}>
               <div className="flex items-start gap-3">
-                <AlertCircle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
-                <p className="text-sm text-red-700">
-                  {errorMessages[error] || 'An error occurred. Please try again.'}
-                </p>
+                <AlertCircle className={`h-5 w-5 flex-shrink-0 mt-0.5 ${isNotAuthorized ? 'text-amber-500' : 'text-red-500'}`} />
+                <div>
+                  <p className={`text-sm ${isNotAuthorized ? 'text-amber-800' : 'text-red-700'}`}>
+                    {errorMessages[error] || 'An error occurred. Please try again.'}
+                  </p>
+                  {isNotAuthorized && (
+                    <p className="text-xs text-amber-600 mt-1">
+                      Sign in with an authorized Fortium account, or contact an administrator.
+                    </p>
+                  )}
+                </div>
               </div>
-              {error === 'not_authorized' && (
-                <a
-                  href={getAuthUrl('/switch-account')}
-                  className="mt-3 flex items-center justify-center gap-2 w-full px-3 py-2 text-sm text-red-700 hover:text-red-800 hover:bg-red-100 rounded-md transition-colors"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-                  </svg>
-                  Try a different account
-                </a>
+            </div>
+          )}
+
+          {/* When not authorized: primary action is switching accounts */}
+          {isNotAuthorized ? (
+            <>
+              <a
+                href={getAuthUrl('/login?prompt=select_account')}
+                className="flex items-center justify-center gap-3 w-full px-4 py-3 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-all font-medium"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                </svg>
+                Sign in with a different account
+              </a>
+            </>
+          ) : (
+            <>
+              {/* Current account indicator */}
+              {knownEmail && (
+                <div className="mb-4 p-3 rounded-lg bg-gray-50 border border-gray-200 text-center">
+                  <p className="text-xs text-gray-500 mb-1">Signed in as</p>
+                  <p className="text-sm font-medium text-gray-700">{knownEmail}</p>
+                </div>
               )}
-            </div>
-          )}
 
-          {/* Current account indicator */}
-          {knownEmail && !error && (
-            <div className="mb-4 p-3 rounded-lg bg-gray-50 border border-gray-200 text-center">
-              <p className="text-xs text-gray-500 mb-1">Signed in as</p>
-              <p className="text-sm font-medium text-gray-700">{knownEmail}</p>
-            </div>
+              {/* Sign in button */}
+              <a
+                href={getAuthUrl('/login')}
+                className="flex items-center justify-center gap-3 w-full px-4 py-3 bg-white border-2 border-gray-200 rounded-lg hover:border-gray-300 hover:bg-gray-50 transition-all group"
+              >
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+                  <polyline points="10 17 15 12 10 7" />
+                  <line x1="15" y1="12" x2="3" y2="12" />
+                </svg>
+                <span className="text-gray-700 font-medium">
+                  {knownEmail ? `Sign in as ${knownEmail}` : 'Sign in'}
+                </span>
+              </a>
+              <div className="text-center mt-2">
+                <a
+                  href={getAuthUrl('/login?prompt=select_account')}
+                  className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  {knownEmail ? 'Use a different account' : 'Sign in with a different account'}
+                </a>
+              </div>
+            </>
           )}
-
-          {/* Sign in button */}
-          <a
-            href={getAuthUrl(error === 'not_authorized' ? '/switch-account' : '/login')}
-            className="flex items-center justify-center gap-3 w-full px-4 py-3 bg-white border-2 border-gray-200 rounded-lg hover:border-gray-300 hover:bg-gray-50 transition-all group"
-          >
-            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
-              <polyline points="10 17 15 12 10 7" />
-              <line x1="15" y1="12" x2="3" y2="12" />
-            </svg>
-            <span className="text-gray-700 font-medium">
-              {knownEmail ? `Sign in as ${knownEmail}` : 'Sign in'}
-            </span>
-          </a>
-          <div className="text-center mt-2">
-            <a
-              href={getAuthUrl('/switch-account')}
-              className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
-            >
-              {knownEmail ? 'Use a different account' : 'Sign in with a different account'}
-            </a>
-          </div>
 
           {/* Divider */}
           <div className="relative my-8">

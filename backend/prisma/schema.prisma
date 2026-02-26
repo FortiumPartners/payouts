@@ -34,14 +34,18 @@ model Tenant {
   @@map("tenants")
 }
 
-// AdminUser for Google OAuth allowlist
-model AdminUser {
-  id          String    @id @default(cuid())
-  email       String    @unique
-  createdAt   DateTime  @default(now())
-  lastLoginAt DateTime?
+// User tracks all users who log in via Identity
+model User {
+  id              String    @id                          // fortium_user_id from Identity
+  email           String    @unique
+  name            String?
+  permissions     String[]  @default([])
+  lastLoginAt     DateTime?
+  createdAt       DateTime  @default(now())
 
-  @@map("admin_users")
+  dismissedBills  DismissedBill[]
+
+  @@map("users")
 }
 
 // PaymentRecord tracks payment attempts and history
@@ -105,7 +109,7 @@ model DismissedBill {
   id            String   @id @default(cuid())
   pcBillId      String   @unique
   reason        String
-  dismissedBy   String
+  dismissedBy   String                        // fortium_user_id
   dismissedAt   DateTime @default(now())
   payeeName     String
   clientName    String
@@ -114,6 +118,8 @@ model DismissedBill {
   description   String?
   qboInvoiceNum String?
   qboBillNum    String?
+
+  dismissedByUser User? @relation(fields: [dismissedBy], references: [id])
 
   @@index([pcBillId])
   @@map("dismissed_bills")

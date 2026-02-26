@@ -1,7 +1,7 @@
 /**
  * Authentication routes for Fortium Identity OIDC.
  * Uses @fortium/identity-client-fastify plugin.
- * Identity authenticates, Payouts authorizes (admin_users allowlist).
+ * Identity authenticates, Payouts authorizes via Identity entitlements.
  */
 
 import { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
@@ -49,36 +49,50 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         throw new Error('not_authorized');
       }
 
-      // Upsert admin_users for local tracking (last login, etc.)
-      await prisma.adminUser.upsert({
-        where: { email: claims.email },
-        create: { email: claims.email, lastLoginAt: new Date() },
-        update: { lastLoginAt: new Date() },
+      const entitlement = claims.apps?.find(
+        (app) => app.app_id === config.IDENTITY_CLIENT_ID
+      );
+      const permissions = entitlement?.permissions ?? [];
+
+      await prisma.user.upsert({
+        where: { id: claims.fortium_user_id },
+        create: {
+          id: claims.fortium_user_id,
+          email: claims.email,
+          name: claims.name,
+          permissions,
+          lastLoginAt: new Date(),
+        },
+        update: {
+          email: claims.email,
+          name: claims.name,
+          permissions,
+          lastLoginAt: new Date(),
+        },
       });
 
-      return {};
+      return { name: claims.name, permissions };
     },
 
-    // Payouts /auth/me response
+    // Payouts /auth/me response — flat object (no wrapper)
     getMe: async (session: SessionPayload) => {
-      const user = await prisma.adminUser.findUnique({
-        where: { email: session.email },
-        select: { id: true, email: true, lastLoginAt: true },
+      const user = await prisma.user.findUnique({
+        where: { id: session.fortiumUserId },
+        select: { id: true, email: true, name: true, permissions: true, lastLoginAt: true },
       });
 
       if (!user) {
         throw new Error('User not found');
       }
 
-      return { user };
+      return user;
     },
   });
 
   /**
    * GET /auth/switch-account
-   * Clears Payouts cookies, then redirects to Identity's signout-and-retry
-   * which destroys the Identity session and redirects back to Payouts
-   * /login?switch=1. The frontend then auto-starts login with account picker.
+   * Clears Payouts cookies, then starts a fresh login with account picker.
+   * Uses prompt=select_account so Identity/Google shows the account chooser.
    */
   fastify.get('/switch-account', async (_request, reply) => {
     reply.clearCookie('auth_token', { path: '/' });
@@ -86,9 +100,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     reply.clearCookie('refresh_token', { path: '/' });
     reply.clearCookie('oidc_state', { path: '/' });
 
-    const identityBase = config.IDENTITY_ISSUER.replace(/\/oidc$/, '');
-    const returnTo = `${config.FRONTEND_URL}/login?switch=1`;
-    reply.redirect(`${identityBase}/auth/signout-and-retry?client_id=${config.IDENTITY_CLIENT_ID}&return_to=${encodeURIComponent(returnTo)}`);
+    reply.redirect('/auth/login?prompt=select_account');
   });
 
   /**
@@ -138,10 +150,10 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       const email = body.email.toLowerCase();
       const fortiumUserId = body.fortiumUserId || `test-${Date.now()}`;
 
-      const adminUser = await prisma.adminUser.upsert({
-        where: { email },
-        create: { email, lastLoginAt: new Date() },
-        update: { lastLoginAt: new Date() },
+      const testUser = await prisma.user.upsert({
+        where: { id: fortiumUserId },
+        create: { id: fortiumUserId, email, lastLoginAt: new Date() },
+        update: { email, lastLoginAt: new Date() },
       });
 
       const sessionToken = await createSessionToken(
@@ -166,9 +178,9 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send({
         success: true,
         user: {
-          id: adminUser.id,
-          email: adminUser.email,
-          lastLoginAt: adminUser.lastLoginAt,
+          id: testUser.id,
+          email: testUser.email,
+          lastLoginAt: testUser.lastLoginAt,
         },
         message: 'Test login successful. Session cookie has been set.',
       });
@@ -205,6 +217,7 @@ export async function requireAuth(
     return reply.status(401).send({ error: 'Session expired' });
   }
 
+  (request as any).userId = session.fortiumUserId;
   (request as any).userEmail = session.email;
   (request as any).fortiumUserId = session.fortiumUserId;
 }
