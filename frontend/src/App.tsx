@@ -441,6 +441,14 @@ function Login() {
   const params = new URLSearchParams(window.location.search);
   const error = params.get('error');
   const rejectedEmail = params.get('email');
+  const switchAccount = params.get('switch');
+
+  // After Identity session cleared via signout-and-retry, auto-start fresh login.
+  // Identity defaults to prompt=select_account for Google OAuth.
+  if (switchAccount === '1') {
+    window.location.href = getAuthUrl('/login');
+    return null;
+  }
 
   // Track which Google account Identity last saw.
   // Persisted in localStorage so it survives page reloads.
@@ -522,7 +530,7 @@ function Login() {
           {isNotAuthorized ? (
             <>
               <a
-                href={getAuthUrl('/login?prompt=select_account')}
+                href={getAuthUrl('/switch-account')}
                 className="flex items-center justify-center gap-3 w-full px-4 py-3 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-all font-medium"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -557,7 +565,7 @@ function Login() {
               </a>
               <div className="text-center mt-2">
                 <a
-                  href={getAuthUrl('/login?prompt=select_account')}
+                  href={getAuthUrl('/switch-account')}
                   className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
                 >
                   {knownEmail ? 'Use a different account' : 'Sign in with a different account'}

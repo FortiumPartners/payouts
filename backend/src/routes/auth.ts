@@ -91,8 +91,10 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
 
   /**
    * GET /auth/switch-account
-   * Clears Payouts cookies, then starts a fresh login with account picker.
-   * Uses prompt=select_account so Identity/Google shows the account chooser.
+   * Clears Payouts cookies, then redirects through Identity's signout-and-retry
+   * to destroy the Identity OIDC session. Identity then redirects back to Payouts
+   * /login, where a fresh /auth/login triggers Google's account picker.
+   * (prompt=select_account cannot be passed directly — breaks Identity's OIDC flow.)
    */
   fastify.get('/switch-account', async (_request, reply) => {
     reply.clearCookie('auth_token', { path: '/' });
@@ -100,7 +102,9 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     reply.clearCookie('refresh_token', { path: '/' });
     reply.clearCookie('oidc_state', { path: '/' });
 
-    reply.redirect('/auth/login?prompt=select_account');
+    const identityBase = config.IDENTITY_ISSUER.replace(/\/oidc$/, '');
+    const returnTo = `${config.FRONTEND_URL}/login?switch=1`;
+    reply.redirect(`${identityBase}/auth/signout-and-retry?client_id=${config.IDENTITY_CLIENT_ID}&return_to=${encodeURIComponent(returnTo)}`);
   });
 
   /**
