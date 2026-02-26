@@ -522,7 +522,7 @@ function Login() {
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
                   </svg>
-                  Use a different Google account
+                  Try a different account
                 </a>
               )}
             </div>
@@ -531,7 +531,7 @@ function Login() {
           {/* Current account indicator */}
           {knownEmail && !error && (
             <div className="mb-4 p-3 rounded-lg bg-gray-50 border border-gray-200 text-center">
-              <p className="text-xs text-gray-500 mb-1">Signed in to Google as</p>
+              <p className="text-xs text-gray-500 mb-1">Signed in as</p>
               <p className="text-sm font-medium text-gray-700">{knownEmail}</p>
             </div>
           )}

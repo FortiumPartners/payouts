@@ -33,25 +33,27 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     postLoginPath: '/',
     postLogoutPath: '/login',
 
-    // Payouts authorization: admin allowlist
+    // Payouts authorization: check Identity entitlements
     authorize: async (claims: FortiumClaims) => {
       logger.info(
-        { fortiumUserId: claims.fortium_user_id, email: claims.email },
+        { fortiumUserId: claims.fortium_user_id, email: claims.email, apps: claims.apps },
         'OIDC authentication successful'
       );
 
-      const adminUser = await prisma.adminUser.findUnique({
-        where: { email: claims.email },
-      });
+      const hasEntitlement = claims.apps?.some(
+        (app) => app.app_id === config.IDENTITY_CLIENT_ID
+      );
 
-      if (!adminUser) {
-        logger.warn({ email: claims.email }, 'User not in admin_users allowlist');
+      if (!hasEntitlement) {
+        logger.warn({ email: claims.email }, 'User has no entitlement for this app');
         throw new Error('not_authorized');
       }
 
-      await prisma.adminUser.update({
+      // Upsert admin_users for local tracking (last login, etc.)
+      await prisma.adminUser.upsert({
         where: { email: claims.email },
-        data: { lastLoginAt: new Date() },
+        create: { email: claims.email, lastLoginAt: new Date() },
+        update: { lastLoginAt: new Date() },
       });
 
       return {};
