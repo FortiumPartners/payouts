@@ -40,6 +40,9 @@ services:
       - POSTMARK_FROM_EMAIL=${POSTMARK_FROM_EMAIL:-notifications@fortiumpartners.com}
       - POSTMARK_FROM_NAME=${POSTMARK_FROM_NAME:-Fortium Partners}
       - FORTIUM_FINANCE_EMAIL=${FORTIUM_FINANCE_EMAIL:-accounting@fortiumpartners.com}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS:-}
+      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-payouts-api}
     volumes:
       - ./backend:/app:delegated
       - /app/node_modules
