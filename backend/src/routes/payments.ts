@@ -480,33 +480,44 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
 
           let contactUuid = recipient.wiseContactId!;
 
-          // Get the contact's actual recipient account (Wise balance, not email)
-          let recipientAccountId = await wise.findRecipientAccountForContact(
-            contactUuid,
-            recipient.targetCurrency
-          );
+          // Use cached account ID if available (avoids flaky Wise API calls)
+          let recipientAccountId: number | null = recipient.wiseRecipientAccountId ?? null;
 
-          // If no account found, try Contact Discovery API to create proper linkage
-          if (!recipientAccountId && recipient.wiseEmail) {
+          if (recipientAccountId) {
             fastify.log.info({
               contactUuid,
-              email: recipient.wiseEmail,
-            }, 'No account found for contact, trying discovery API');
+              recipientAccountId,
+              payeeName: bill.resourceName,
+            }, 'Using cached wiseRecipientAccountId');
+          } else {
+            // No cache — look up via Wise API
+            recipientAccountId = await wise.findRecipientAccountForContact(
+              contactUuid,
+              recipient.targetCurrency
+            );
 
-            const discovered = await wise.discoverContact(recipient.wiseEmail);
-            if (discovered) {
-              // Update stored contact UUID if discovery returned a different one
-              if (discovered.id !== contactUuid) {
-                contactUuid = discovered.id;
-                await prisma.wiseRecipient.update({
-                  where: { qboVendorId: bill.qboVendorId },
-                  data: { wiseContactId: discovered.id },
-                });
+            // If no account found, try Contact Discovery API to create proper linkage
+            if (!recipientAccountId && recipient.wiseEmail) {
+              fastify.log.info({
+                contactUuid,
+                email: recipient.wiseEmail,
+              }, 'No account found for contact, trying discovery API');
+
+              const discovered = await wise.discoverContact(recipient.wiseEmail);
+              if (discovered) {
+                // Update stored contact UUID if discovery returned a different one
+                if (discovered.id !== contactUuid) {
+                  contactUuid = discovered.id;
+                  await prisma.wiseRecipient.update({
+                    where: { qboVendorId: bill.qboVendorId },
+                    data: { wiseContactId: discovered.id },
+                  });
+                }
+                recipientAccountId = await wise.findRecipientAccountForContact(
+                  discovered.id,
+                  recipient.targetCurrency
+                );
               }
-              recipientAccountId = await wise.findRecipientAccountForContact(
-                discovered.id,
-                recipient.targetCurrency
-              );
             }
           }
 
