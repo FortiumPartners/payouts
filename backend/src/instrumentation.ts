@@ -25,7 +25,7 @@ if (otlpEndpoint) {
 
   const resource = resourceFromAttributes({
     [ATTR_SERVICE_NAME]: serviceName,
-    [ATTR_SERVICE_VERSION]: '0.1.0',
+    [ATTR_SERVICE_VERSION]: process.env.npm_package_version || '0.1.0',
   });
 
   // Parse OTEL_EXPORTER_OTLP_HEADERS (format: "Key=Value,Key2=Value2")
@@ -64,7 +64,7 @@ if (otlpEndpoint) {
   sdk.start();
   console.log(`[otel] Traces enabled → ${otlpEndpoint}`);
 
-  process.on('SIGTERM', () => {
-    sdk.shutdown().catch((err) => console.error('[otel] SDK shutdown error', err));
-  });
+  const shutdown = () => sdk.shutdown().catch((err) => console.error('[otel] SDK shutdown error', err));
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }

@@ -39,15 +39,16 @@ export function buildTransport() {
       // stdout for Render log viewer
       { target: 'pino/file', options: { destination: 1 }, level: 'info' as const },
       // OTel log export for Grafana Cloud Loki
+      // pino-opentelemetry-transport reads OTEL_EXPORTER_OTLP_ENDPOINT from env automatically
       {
         target: 'pino-opentelemetry-transport',
         options: {
           resourceAttributes: {
-            'service.name': 'payouts-api',
-            'service.version': '0.1.0',
+            'service.name': process.env.OTEL_SERVICE_NAME || 'payouts-api',
+            'service.version': process.env.npm_package_version || '0.1.0',
           },
-          loggerName: 'payouts-api',
-          serviceVersion: '0.1.0',
+          loggerName: process.env.OTEL_SERVICE_NAME || 'payouts-api',
+          serviceVersion: process.env.npm_package_version || '0.1.0',
         },
         level: 'info' as const,
       },
