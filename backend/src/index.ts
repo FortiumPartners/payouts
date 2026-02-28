@@ -9,6 +9,7 @@ import {
   ZodTypeProvider,
 } from 'fastify-type-provider-zod';
 import { config } from './lib/config.js';
+import { buildTransport, redactConfig, baseFields } from './lib/logger.js';
 import { healthRoutes } from './routes/health.js';
 import { authRoutes } from './routes/auth.js';
 import { billsRoutes } from './routes/bills.js';
@@ -19,10 +20,9 @@ import { statusRoutes } from './routes/status.js';
 const fastify = Fastify({
   logger: {
     level: config.LOG_LEVEL,
-    transport:
-      config.NODE_ENV === 'development'
-        ? { target: 'pino-pretty', options: { colorize: true } }
-        : undefined,
+    transport: buildTransport(),
+    base: baseFields,
+    redact: redactConfig,
   },
 }).withTypeProvider<ZodTypeProvider>();
 

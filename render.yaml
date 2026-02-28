@@ -42,6 +42,12 @@ services:
         sync: false
       - key: BILLCOM_API_KEY
         sync: false
+      - key: OTEL_EXPORTER_OTLP_ENDPOINT
+        sync: false
+      - key: OTEL_EXPORTER_OTLP_HEADERS
+        sync: false
+      - key: OTEL_SERVICE_NAME
+        value: payouts-api
 
   # Frontend web service (nginx reverse proxy for same-origin cookies)
   - type: web
