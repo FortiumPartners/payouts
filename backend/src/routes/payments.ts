@@ -467,7 +467,29 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
         const reference = `${bill.externalInvoiceDocNum || bill.uid}-${lastName}`.substring(0, 10);
 
         // Determine payment flow based on recipient type
-        const isWiseToWise = recipient.wiseContactId && recipient.wiseContactId.includes('-');
+        // A UUID contact ID means we fetched it from the v2 contacts API.
+        // But we need to check if it's actually a Wise balance account (type: wise)
+        // vs a bank account (type: bank). Bank contacts should use the bank transfer
+        // path, not the Wise-to-Wise path which falls back to email claim links.
+        const hasUuidContact = recipient.wiseContactId && recipient.wiseContactId.includes('-');
+        let isWiseToWise = false;
+
+        if (hasUuidContact) {
+          // Look up the contact type from the Wise contacts list
+          const allRecipients = await wise.listRecipients();
+          const matchedRecipient = allRecipients.find(r => r.contactUuid === recipient.wiseContactId);
+          isWiseToWise = matchedRecipient?.type === 'wise';
+
+          if (matchedRecipient) {
+            fastify.log.info({
+              contactUuid: recipient.wiseContactId,
+              contactType: matchedRecipient.type,
+              contactName: matchedRecipient.name?.fullName,
+              isWiseToWise,
+            }, 'Resolved contact type for payment routing');
+          }
+        }
+
         let transfer;
         let quote;
 
@@ -602,13 +624,34 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
           // ---------------------------------------------------------------
           let recipientAccountId: number | null = null;
 
+          // Use cached account ID if available
+          if (recipient.wiseRecipientAccountId) {
+            recipientAccountId = recipient.wiseRecipientAccountId;
+            fastify.log.info({ recipientAccountId }, 'Using cached wiseRecipientAccountId for bank transfer');
+          }
           // Check if wiseContactId is a numeric account ID (from v1/accounts)
-          if (recipient.wiseContactId && !recipient.wiseContactId.includes('-')) {
+          else if (recipient.wiseContactId && !recipient.wiseContactId.includes('-')) {
             recipientAccountId = parseInt(recipient.wiseContactId, 10);
             fastify.log.info({ recipientAccountId }, 'Using stored v1/accounts ID');
           }
+          // UUID contact — look up bank accounts via contacts API
+          else if (recipient.wiseContactId && recipient.wiseContactId.includes('-')) {
+            const bankAccountId = await wise.findRecipientAccountForContact(
+              recipient.wiseContactId,
+              recipient.targetCurrency
+            );
+            if (bankAccountId) {
+              recipientAccountId = bankAccountId;
+              // Cache it for next time
+              await prisma.wiseRecipient.update({
+                where: { qboVendorId: bill.qboVendorId },
+                data: { wiseRecipientAccountId: bankAccountId },
+              });
+              fastify.log.info({ recipientAccountId, contactUuid: recipient.wiseContactId }, 'Found bank account via contact UUID');
+            }
+          }
           // Try email-based lookup
-          else if (recipient.wiseEmail && !recipient.wiseEmail.toLowerCase().includes('wise account')) {
+          if (!recipientAccountId && recipient.wiseEmail && !recipient.wiseEmail.toLowerCase().includes('wise account')) {
             const contact = await wise.findContact(recipient.wiseEmail, recipient.targetCurrency);
             if (contact) {
               recipientAccountId = contact.id;
