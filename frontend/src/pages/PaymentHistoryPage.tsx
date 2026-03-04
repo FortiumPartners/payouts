@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { DollarSign, ArrowLeft } from 'lucide-react';
-import { PaymentFilters, PaymentFilterValues } from '../components/PaymentFilters';
+import { PaymentFilters, PaymentFilterValues, FilterOption } from '../components/PaymentFilters';
 import { PaymentTable } from '../components/PaymentTable';
 
 // Default filter values
@@ -19,6 +19,13 @@ const defaultFilters: PaymentFilterValues = {
 export function PaymentHistoryPage() {
   const [filters, setFilters] = useState<PaymentFilterValues>(defaultFilters);
   const [appliedFilters, setAppliedFilters] = useState<PaymentFilterValues>(defaultFilters);
+  const [payeeOptions, setPayeeOptions] = useState<FilterOption[]>([]);
+  const [clientOptions, setClientOptions] = useState<FilterOption[]>([]);
+
+  const handleFiltersLoaded = useCallback((payees: FilterOption[], clients: FilterOption[]) => {
+    setPayeeOptions(payees);
+    setClientOptions(clients);
+  }, []);
 
   const handleApplyFilters = () => {
     setAppliedFilters({ ...filters });
@@ -54,11 +61,13 @@ export function PaymentHistoryPage() {
           onChange={setFilters}
           onApply={handleApplyFilters}
           onClear={handleClearFilters}
+          payeeOptions={payeeOptions}
+          clientOptions={clientOptions}
         />
 
         {/* Table */}
         <div className="mt-6">
-          <PaymentTable filters={appliedFilters} />
+          <PaymentTable filters={appliedFilters} onFiltersLoaded={handleFiltersLoaded} />
         </div>
       </main>
     </div>
