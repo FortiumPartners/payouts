@@ -10,6 +10,7 @@
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
+    "@fortium/ideas-widget": "file:./vendor/ideas-widget",
     "@tanstack/react-query": "^5.24.0",
     "clsx": "^2.1.0",
     "lucide-react": "^0.344.0",

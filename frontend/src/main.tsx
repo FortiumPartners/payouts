@@ -10,6 +10,9 @@ import 'primereact/resources/themes/lara-light-blue/theme.css';
 import 'primereact/resources/primereact.min.css';
 import 'primeicons/primeicons.css';
 
+// Ideas widget CSS
+import '@fortium/ideas-widget/dist/style.css';
+
 // App CSS (after PrimeReact to allow overrides)
 import './index.css';
 

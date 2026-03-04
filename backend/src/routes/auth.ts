@@ -91,6 +91,26 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
 
   // GET /auth/switch-account is provided by identity-client plugin
 
+  // GET /auth/token — return raw Identity id_token for widget integrations
+  fastify.get('/token', async (request, reply) => {
+    const authCookie = request.cookies[AUTH_TOKEN_COOKIE];
+    if (!authCookie) return reply.status(401).send({ error: 'Not authenticated' });
+
+    const unsigned = request.unsignCookie(authCookie);
+    if (!unsigned.valid || !unsigned.value) return reply.status(401).send({ error: 'Session expired' });
+
+    const session = await verifySessionToken(unsigned.value, sessionConfig);
+    if (!session) return reply.status(401).send({ error: 'Session expired' });
+
+    const idTokenCookie = request.cookies['id_token'];
+    if (!idTokenCookie) return reply.status(404).send({ error: 'No identity token available' });
+
+    const idToken = request.unsignCookie(idTokenCookie);
+    if (!idToken.valid || !idToken.value) return reply.status(404).send({ error: 'Identity token invalid' });
+
+    return { token: idToken.value };
+  });
+
   /**
    * POST /auth/test-login
    * Test login for E2E testing, Playwright, Claude automation
