@@ -467,93 +467,69 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
         const reference = `${bill.externalInvoiceDocNum || bill.uid}-${lastName}`.substring(0, 10);
 
         // Determine payment flow based on recipient type
-        // A UUID contact ID means we fetched it from the v2 contacts API.
-        // But we need to check if it's actually a Wise balance account (type: wise)
-        // vs a bank account (type: bank). Bank contacts should use the bank transfer
-        // path, not the Wise-to-Wise path which falls back to email claim links.
-        const hasUuidContact = recipient.wiseContactId && recipient.wiseContactId.includes('-');
-        let isWiseToWise = false;
-
-        if (hasUuidContact) {
-          // Look up the contact type from the Wise contacts list
-          const allRecipients = await wise.listRecipients();
-          const matchedRecipient = allRecipients.find(r => r.contactUuid === recipient.wiseContactId);
-          isWiseToWise = matchedRecipient?.type === 'wise';
-
-          if (matchedRecipient) {
-            fastify.log.info({
-              contactUuid: recipient.wiseContactId,
-              contactType: matchedRecipient.type,
-              contactName: matchedRecipient.name?.fullName,
-              isWiseToWise,
-            }, 'Resolved contact type for payment routing');
-          }
-        }
+        // Payment routing: look up ALL v1/accounts for this recipient,
+        // then pick the best account type: wise > bank > email.
+        // The v1 API has the real account types (email, canadian, wise, etc.)
+        // Previous bug: cached wiseRecipientAccountId could be an email-type
+        // account, causing claim links even when a bank account exists.
 
         let transfer;
         let quote;
 
-        if (isWiseToWise) {
+        // Fetch all v1/accounts for this currency to find the best account type
+        const v1Accounts = await wise.listV1Accounts(recipient.targetCurrency);
+
+        // Match accounts to this recipient by name or email
+        const matchedAccounts = v1Accounts.filter(a => {
+          const nameMatch = a.accountHolderName.toLowerCase().includes(
+            bill.resourceName.split(' ').pop()!.toLowerCase()
+          );
+          const emailMatch = recipient.wiseEmail &&
+            a.details?.email?.toLowerCase() === recipient.wiseEmail.toLowerCase();
+          return nameMatch || emailMatch;
+        });
+
+        // Categorize: "wise" = Wise balance, "email" = claim link, anything else = bank
+        const wiseAccount = matchedAccounts.find(a => a.type === 'wise');
+        const bankAccount = matchedAccounts.find(a => a.type !== 'email' && a.type !== 'wise');
+        const emailAccount = matchedAccounts.find(a => a.type === 'email');
+
+        fastify.log.info({
+          payeeName: bill.resourceName,
+          contactId: recipient.wiseContactId,
+          cachedAccountId: recipient.wiseRecipientAccountId,
+          matchedAccounts: matchedAccounts.map(a => ({
+            id: a.id, type: a.type, name: a.accountHolderName,
+          })),
+        }, 'Payment routing: resolved v1 accounts');
+
+        if (wiseAccount) {
           // ---------------------------------------------------------------
           // WISE-TO-WISE TRANSFER (direct to recipient's Wise balance)
           // ---------------------------------------------------------------
-          // Use the contact's actual Wise balance account — NOT an email
-          // recipient. Email recipients always trigger claim links.
+          const recipientAccountId = wiseAccount.id;
 
-          let contactUuid = recipient.wiseContactId!;
-
-          // Use cached account ID if available (avoids flaky Wise API calls)
-          let recipientAccountId: number | null = recipient.wiseRecipientAccountId ?? null;
-
-          if (recipientAccountId) {
-            fastify.log.info({
-              contactUuid,
-              recipientAccountId,
-              payeeName: bill.resourceName,
-            }, 'Using cached wiseRecipientAccountId');
-          } else {
-            // No cache — look up via Wise API
-            recipientAccountId = await wise.findRecipientAccountForContact(
-              contactUuid,
-              recipient.targetCurrency
-            );
-
-            // If no account found, try Contact Discovery API to create proper linkage
-            if (!recipientAccountId && recipient.wiseEmail) {
-              fastify.log.info({
-                contactUuid,
-                email: recipient.wiseEmail,
-              }, 'No account found for contact, trying discovery API');
-
-              const discovered = await wise.discoverContact(recipient.wiseEmail);
-              if (discovered) {
-                // Update stored contact UUID if discovery returned a different one
-                if (discovered.id !== contactUuid) {
-                  contactUuid = discovered.id;
-                  await prisma.wiseRecipient.update({
-                    where: { qboVendorId: bill.qboVendorId },
-                    data: { wiseContactId: discovered.id },
-                  });
-                }
-                recipientAccountId = await wise.findRecipientAccountForContact(
-                  discovered.id,
-                  recipient.targetCurrency
-                );
-              }
-            }
-          }
-
-          if (!recipientAccountId) {
-            return reply.status(400).send({
-              success: false,
-              billId,
-              amount: bill.adjustedBillPayment,
-              status: 'no_wise_account',
-              message: `Could not find a Wise balance account for "${bill.resourceName}". The contact may not have a linked Wise account for ${recipient.targetCurrency}.`,
+          if (recipientAccountId !== recipient.wiseRecipientAccountId) {
+            await prisma.wiseRecipient.update({
+              where: { qboVendorId: bill.qboVendorId },
+              data: { wiseRecipientAccountId: recipientAccountId },
             });
           }
 
-          // Cache the contact account ID (and clear old email recipient ID if different)
+          fastify.log.info({ recipientAccountId, payeeName: bill.resourceName }, 'Using Wise-to-Wise transfer');
+
+          quote = await wise.createQuote(
+            'CAD', recipient.targetCurrency, bill.adjustedBillPayment,
+            recipient.wiseContactId || undefined
+          );
+          transfer = await wise.createTransfer(quote.id, recipientAccountId, reference);
+
+        } else if (bankAccount) {
+          // ---------------------------------------------------------------
+          // BANK ACCOUNT TRANSFER (direct deposit — no claim link)
+          // ---------------------------------------------------------------
+          const recipientAccountId = bankAccount.id;
+
           if (recipientAccountId !== recipient.wiseRecipientAccountId) {
             await prisma.wiseRecipient.update({
               where: { qboVendorId: bill.qboVendorId },
@@ -562,125 +538,56 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
           }
 
           fastify.log.info({
-            contactUuid,
-            recipientAccountId,
-            payeeName: bill.resourceName,
-          }, 'Using Wise-to-Wise transfer with contact account');
+            recipientAccountId, accountType: bankAccount.type, payeeName: bill.resourceName,
+          }, 'Using bank account transfer (direct deposit)');
 
-          // Quote with targetContactId for Wise-to-Wise routing
-          quote = await wise.createQuote(
-            'CAD',
-            recipient.targetCurrency,
-            bill.adjustedBillPayment,
-            contactUuid
-          );
-
-          // Transfer uses the contact's actual account (not email recipient)
+          quote = await wise.createQuote('CAD', recipient.targetCurrency, bill.adjustedBillPayment);
           transfer = await wise.createTransfer(quote.id, recipientAccountId, reference);
-        } else if (recipient.wiseEmail &&
-          !recipient.wiseEmail.toLowerCase().includes('wise account') &&
-          !recipient.wiseEmail.toLowerCase().includes('wise business')) {
-          // ---------------------------------------------------------------
-          // EMAIL RECIPIENT TRANSFER (fallback when no Wise-to-Wise contact)
-          // ---------------------------------------------------------------
-          // Recipient doesn't have a Wise account linked — send via email.
-          // They'll get a link to claim the payment.
 
-          let emailRecipientId = recipient.wiseRecipientAccountId;
+        } else if (emailAccount || recipient.wiseEmail) {
+          // ---------------------------------------------------------------
+          // EMAIL RECIPIENT TRANSFER (last resort — sends claim link)
+          // ---------------------------------------------------------------
+          let emailRecipientId = emailAccount?.id ?? null;
 
-          if (emailRecipientId) {
+          if (!emailRecipientId && recipient.wiseEmail) {
             fastify.log.info({
-              cachedAccountId: emailRecipientId,
-              payeeName: bill.resourceName,
-            }, 'Using cached email recipient account ID');
-          } else {
-            fastify.log.info({
-              email: recipient.wiseEmail,
-              payeeName: bill.resourceName,
-            }, 'Creating email recipient (no Wise-to-Wise contact)');
+              email: recipient.wiseEmail, payeeName: bill.resourceName,
+            }, 'Creating email recipient (no bank or Wise account found)');
 
             emailRecipientId = await wise.createEmailRecipient(
-              bill.resourceName,
-              recipient.wiseEmail,
-              recipient.targetCurrency
+              bill.resourceName, recipient.wiseEmail, recipient.targetCurrency
             );
+          }
 
+          if (!emailRecipientId) {
+            return reply.status(400).send({
+              success: false, billId, amount: bill.adjustedBillPayment,
+              status: 'invalid_recipient',
+              message: `No valid payment method for "${bill.resourceName}".`,
+            });
+          }
+
+          if (emailRecipientId !== recipient.wiseRecipientAccountId) {
             await prisma.wiseRecipient.update({
               where: { qboVendorId: bill.qboVendorId },
               data: { wiseRecipientAccountId: emailRecipientId },
             });
           }
 
-          quote = await wise.createQuote(
-            'CAD',
-            recipient.targetCurrency,
-            bill.adjustedBillPayment
-          );
+          fastify.log.warn({
+            recipientAccountId: emailRecipientId, payeeName: bill.resourceName,
+          }, 'Using email recipient (claim link) — no bank account available');
 
-          transfer = await wise.createTransfer(quote.id, emailRecipientId, reference);
-        } else {
-          // ---------------------------------------------------------------
-          // BANK ACCOUNT TRANSFER (using v1/accounts numeric ID)
-          // ---------------------------------------------------------------
-          let recipientAccountId: number | null = null;
-
-          // Use cached account ID if available
-          if (recipient.wiseRecipientAccountId) {
-            recipientAccountId = recipient.wiseRecipientAccountId;
-            fastify.log.info({ recipientAccountId }, 'Using cached wiseRecipientAccountId for bank transfer');
-          }
-          // Check if wiseContactId is a numeric account ID (from v1/accounts)
-          else if (recipient.wiseContactId && !recipient.wiseContactId.includes('-')) {
-            recipientAccountId = parseInt(recipient.wiseContactId, 10);
-            fastify.log.info({ recipientAccountId }, 'Using stored v1/accounts ID');
-          }
-          // UUID contact — look up bank accounts via contacts API
-          else if (recipient.wiseContactId && recipient.wiseContactId.includes('-')) {
-            const bankAccountId = await wise.findRecipientAccountForContact(
-              recipient.wiseContactId,
-              recipient.targetCurrency
-            );
-            if (bankAccountId) {
-              recipientAccountId = bankAccountId;
-              // Cache it for next time
-              await prisma.wiseRecipient.update({
-                where: { qboVendorId: bill.qboVendorId },
-                data: { wiseRecipientAccountId: bankAccountId },
-              });
-              fastify.log.info({ recipientAccountId, contactUuid: recipient.wiseContactId }, 'Found bank account via contact UUID');
-            }
-          }
-          // Try email-based lookup
-          if (!recipientAccountId && recipient.wiseEmail && !recipient.wiseEmail.toLowerCase().includes('wise account')) {
-            const contact = await wise.findContact(recipient.wiseEmail, recipient.targetCurrency);
-            if (contact) {
-              recipientAccountId = contact.id;
-            }
-          }
-          // Fall back to name-based matching
-          if (!recipientAccountId) {
-            const accountByName = await wise.findAccountByName(bill.resourceName, recipient.targetCurrency);
-            if (accountByName) {
-              recipientAccountId = accountByName.id;
-              fastify.log.info({ recipientAccountId, type: accountByName.type }, 'Found account by name');
-            }
-          }
-
-          if (!recipientAccountId) {
-            return reply.status(400).send({
-              success: false,
-              billId,
-              amount: bill.adjustedBillPayment,
-              status: 'invalid_recipient',
-              message: `No valid payment method for "${bill.resourceName}". Please configure their Wise contact ID or bank details.`,
-            });
-          }
-
-          // Create quote (CAD -> target currency)
           quote = await wise.createQuote('CAD', recipient.targetCurrency, bill.adjustedBillPayment);
+          transfer = await wise.createTransfer(quote.id, emailRecipientId, reference);
 
-          // Create transfer with numeric account ID
-          transfer = await wise.createTransfer(quote.id, recipientAccountId, reference);
+        } else {
+          return reply.status(400).send({
+            success: false, billId, amount: bill.adjustedBillPayment,
+            status: 'invalid_recipient',
+            message: `No valid payment method for "${bill.resourceName}". Please configure their Wise contact ID or bank details.`,
+          });
         }
 
         // Fund the transfer from Wise balance

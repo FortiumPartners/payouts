@@ -558,6 +558,21 @@ export class WiseClient {
   }
 
   /**
+   * List all v1/accounts for a given currency.
+   * Returns the raw account data including id, type, accountHolderName, and email.
+   */
+  async listV1Accounts(currency: string): Promise<Array<{
+    id: number;
+    accountHolderName: string;
+    type: string;
+    currency: string;
+    details: { email?: string };
+  }>> {
+    const profileId = await this.getBusinessProfileId();
+    return this.request('GET', `/v1/accounts?profileId=${profileId}&currency=${currency}`);
+  }
+
+  /**
    * Find an existing v1/accounts entry by account holder name (fuzzy match).
    * Useful for matching v2/contacts to their v1/accounts entry.
    *
