@@ -46,6 +46,14 @@ export interface QBOBill {
   dueDate: Date;
 }
 
+export interface QBOBillPayment {
+  id: string;
+  billId: string;
+  vendorId: string;
+  totalAmount: number;
+  txnDate: string;
+}
+
 // Internal company IDs in qbo-oauth database
 const COMPANY_IDS: Record<string, string> = {
   US: '1',
@@ -227,6 +235,86 @@ export class FpqboClient {
    */
   isConfigured(): boolean {
     return !!(this.apiUrl && this.apiKey);
+  }
+
+  /**
+   * Check if a BillPayment already exists for a given QBO bill.
+   */
+  async getBillPaymentsForBill(billId: string): Promise<QBOBillPayment[]> {
+    const data = await this.request<any[]>('GET', `/api/bill-payments/by-bill/${billId}?company_id=${this.companyId}`);
+    return (data || []).map((bp: any) => ({
+      id: String(bp.Id || bp.id),
+      billId: String(bp.billId || billId),
+      vendorId: String(bp.VendorRef?.value || bp.vendorId || ''),
+      totalAmount: Number(bp.TotalAmt || bp.totalAmount || 0),
+      txnDate: String(bp.TxnDate || bp.txnDate || ''),
+    }));
+  }
+
+  /**
+   * Create a BillPayment (Check type) in QBO linking to a bill.
+   * Returns the created BillPayment or null if one already exists.
+   */
+  async createBillPayment(params: {
+    vendorId: string;
+    billId: string;
+    amount: number;
+    bankAccountId: string;
+    apAccountId: string;
+    txnDate: string;
+    privateNote?: string;
+    currencyCode?: string;
+  }): Promise<QBOBillPayment | null> {
+    // Idempotency: check if BillPayment already exists for this bill
+    try {
+      const existing = await this.getBillPaymentsForBill(params.billId);
+      if (existing.length > 0) {
+        console.log(`[fpqbo] BillPayment already exists for bill ${params.billId}, skipping creation`);
+        return existing[0];
+      }
+    } catch (err) {
+      // If the endpoint returns 404 (no payments found), that's fine — proceed to create
+      if (err instanceof FpqboError && err.isNotFound) {
+        // Expected — no existing payment
+      } else {
+        throw err;
+      }
+    }
+
+    // FPQBO expects raw QBO BillPayment format
+    const qboPayload: Record<string, unknown> = {
+      PayType: 'Check',
+      TotalAmt: params.amount,
+      TxnDate: params.txnDate,
+      VendorRef: { value: params.vendorId },
+      APAccountRef: { value: params.apAccountId },
+      CheckPayment: {
+        BankAccountRef: { value: params.bankAccountId },
+      },
+      Line: [{
+        Amount: params.amount,
+        LinkedTxn: [{
+          TxnId: params.billId,
+          TxnType: 'Bill',
+        }],
+      }],
+    };
+    if (params.privateNote) {
+      qboPayload.PrivateNote = params.privateNote;
+    }
+    if (params.currencyCode) {
+      qboPayload.CurrencyRef = { value: params.currencyCode };
+    }
+
+    const data = await this.request<any>('POST', `/api/bill-payments/?company_id=${this.companyId}`, qboPayload);
+
+    return {
+      id: String(data.Id || data.id),
+      billId: params.billId,
+      vendorId: params.vendorId,
+      totalAmount: params.amount,
+      txnDate: params.txnDate,
+    };
   }
 
   /**

@@ -43,6 +43,10 @@ const envSchema = z.object({
   WISE_API_TOKEN: z.string().optional(),
   WISE_SANDBOX: z.string().default('false'), // 'true' for sandbox
 
+  // QBO Canada account IDs (for BillPayment recording after Wise payments)
+  QBO_CA_WISE_BANK_ACCOUNT_ID: z.string().optional(), // Wise Business bank account in QBO CA
+  QBO_CA_AP_ACCOUNT_ID: z.string().optional(),         // Accounts Payable account in QBO CA
+
   // Email (Postmark)
   POSTMARK_API_TOKEN: z.string().optional(),
   POSTMARK_FROM_EMAIL: z.string().default('accounting@fortiumpartners.com'),

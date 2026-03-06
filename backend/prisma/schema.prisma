@@ -66,6 +66,9 @@ model PaymentRecord {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
+  // QBO sync
+  qboBillPaymentId String? // QBO BillPayment ID (created after Wise payment for CA bills)
+
   // Email tracking (Phase 1: Wise payment confirmations)
   payeeEmail     String?   // Email address used for notification
   emailSentAt    DateTime? // Timestamp of successful send

@@ -8,8 +8,10 @@ import { z } from 'zod';
 import { getBillComClient, BillComMfaRequired } from '../services/billcom.js';
 import { getWiseClient } from '../services/wise.js';
 import { getPartnerConnectClient } from '../services/partnerconnect.js';
+import { getFpqboClient } from '../services/fpqbo.js';
 import { runControlChecks } from '../services/controls.js';
 import { getEmailService } from '../services/email.js';
+import { config } from '../lib/config.js';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth } from './auth.js';
 
@@ -671,6 +673,50 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
         });
 
         fastify.log.info({ billId, transferId: transfer.id }, 'PaymentRecord created');
+
+        // Record BillPayment in QBO Canada (non-blocking)
+        let qboBillPaymentId: string | null = null;
+        if (config.QBO_CA_WISE_BANK_ACCOUNT_ID && config.QBO_CA_AP_ACCOUNT_ID && bill.externalBillId) {
+          try {
+            const fpqboCA = getFpqboClient('CA');
+            if (fpqboCA.isConfigured()) {
+              const today = new Date().toISOString().split('T')[0];
+              const billPayment = await fpqboCA.createBillPayment({
+                vendorId: bill.qboVendorId,
+                billId: bill.externalBillId,
+                amount: bill.adjustedBillPayment,
+                bankAccountId: config.QBO_CA_WISE_BANK_ACCOUNT_ID,
+                apAccountId: config.QBO_CA_AP_ACCOUNT_ID,
+                txnDate: today,
+                privateNote: `Wise transfer ${transfer.id}`,
+                currencyCode: 'CAD',
+              });
+
+              if (billPayment) {
+                qboBillPaymentId = billPayment.id;
+                fastify.log.info({
+                  billId, qboBillPaymentId, externalBillId: bill.externalBillId,
+                }, 'QBO BillPayment recorded');
+
+                // Update PaymentRecord with QBO BillPayment ID
+                await prisma.paymentRecord.updateMany({
+                  where: { pcBillId: billId, paymentRef: String(transfer.id) },
+                  data: { qboBillPaymentId },
+                });
+              }
+            }
+          } catch (qboErr) {
+            fastify.log.warn({
+              billId, externalBillId: bill.externalBillId, error: String(qboErr),
+            }, 'Failed to record QBO BillPayment (payment still succeeded)');
+          }
+        } else {
+          fastify.log.info({
+            billId,
+            hasConfig: !!(config.QBO_CA_WISE_BANK_ACCOUNT_ID && config.QBO_CA_AP_ACCOUNT_ID),
+            hasExternalBillId: !!bill.externalBillId,
+          }, 'Skipping QBO BillPayment recording');
+        }
 
         return {
           success: true,
