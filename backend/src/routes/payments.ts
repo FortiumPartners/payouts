@@ -500,12 +500,15 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
               transfer = await wise.createTransferFromQuote(quote.id, reference);
             }
           } catch (err) {
-            // Wise-to-Wise failed — fall through to v1/accounts routing
-            fastify.log.warn({
+            // If recipient has a wiseContactId, they're a Wise-to-Wise contact.
+            // Don't fall back to email — surface the error so we can fix the root cause.
+            fastify.log.error({
               contactId: recipient.wiseContactId,
               payeeName: bill.resourceName,
               error: String(err),
-            }, 'Wise-to-Wise transfer failed, falling back to v1/accounts');
+              errorType: err instanceof Error ? err.constructor.name : typeof err,
+            }, 'Wise-to-Wise transfer failed');
+            throw err;
           }
         }
 
@@ -584,7 +587,7 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
                   await wise.updateRecipientAddress(emailRecipientId, {
                     country: countryCode,
                     city: pcUser.City,
-                    postCode: pcUser.Zip || '',
+                    postCode: pcUser.PostalCode || pcUser.Zip || '',
                     firstLine: pcUser.Address1 + (pcUser.Address2 ? `, ${pcUser.Address2}` : ''),
                   });
                   fastify.log.info({

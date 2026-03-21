@@ -42,7 +42,8 @@ export interface PCUser {
   Address2?: string;
   City?: string;
   State?: string;
-  Zip?: string;
+  Zip?: string;         // US zip code
+  PostalCode?: string;  // Canadian postal code
   Country?: string;
 }
 
@@ -373,6 +374,7 @@ export class PartnerConnectClient {
         City: data.City ? String(data.City) : undefined,
         State: data.State ? String(data.State) : undefined,
         Zip: data.Zip ? String(data.Zip) : undefined,
+        PostalCode: data.PostalCode ? String(data.PostalCode) : undefined,
         Country: data.Country ? String(data.Country) : undefined,
       };
     } catch {
