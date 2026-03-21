@@ -35,6 +35,17 @@ export class PCAPIError extends PCError {
 }
 
 // Types
+export interface PCUser {
+  Uid: string;
+  DisplayName: string;
+  Address1?: string;
+  Address2?: string;
+  City?: string;
+  State?: string;
+  Zip?: string;
+  Country?: string;
+}
+
 export interface PCBill {
   uid: string;
   description: string;
@@ -346,6 +357,27 @@ export class PartnerConnectClient {
     }
 
     return paid.map(bill => this.mapBill(bill));
+  }
+
+  /**
+   * Get a user (resource) by UID. Returns null on failure.
+   */
+  async getUser(uid: string): Promise<PCUser | null> {
+    try {
+      const data = await this.request<Record<string, unknown>>('GET', `/api/users/${uid}`);
+      return {
+        Uid: String(data.Uid || ''),
+        DisplayName: String(data.DisplayName || ''),
+        Address1: data.Address1 ? String(data.Address1) : undefined,
+        Address2: data.Address2 ? String(data.Address2) : undefined,
+        City: data.City ? String(data.City) : undefined,
+        State: data.State ? String(data.State) : undefined,
+        Zip: data.Zip ? String(data.Zip) : undefined,
+        Country: data.Country ? String(data.Country) : undefined,
+      };
+    } catch {
+      return null;
+    }
   }
 
   /**

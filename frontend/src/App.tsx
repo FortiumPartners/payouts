@@ -25,7 +25,8 @@ function Dashboard() {
     success: boolean | null;
     message: string | null;
     billId: string | null;
-  }>({ loading: false, success: null, message: null, billId: null });
+    errorStatus: string | null;
+  }>({ loading: false, success: null, message: null, billId: null, errorStatus: null });
   const [pendingPaymentBill, setPendingPaymentBill] = useState<Bill | null>(null);
   const [pendingDismissBill, setPendingDismissBill] = useState<Bill | null>(null);
   const [showDismissed, setShowDismissed] = useState(false);
@@ -65,6 +66,7 @@ function Dashboard() {
         success: false,
         message: err instanceof Error ? err.message : 'Failed to dismiss bill',
         billId: bill.uid,
+        errorStatus: null,
       });
     }
   };
@@ -80,6 +82,7 @@ function Dashboard() {
         success: false,
         message: err instanceof Error ? err.message : 'Failed to restore bill',
         billId: pcBillId,
+        errorStatus: null,
       });
     }
   };
@@ -100,7 +103,7 @@ function Dashboard() {
     if (!bill) return;
 
     setPendingPaymentBill(null);
-    setPaymentStatus({ loading: true, success: null, message: null, billId: bill.uid });
+    setPaymentStatus({ loading: true, success: null, message: null, billId: bill.uid, errorStatus: null });
 
     try {
       const result = await api.payBill(bill.uid);
@@ -111,6 +114,7 @@ function Dashboard() {
           success: true,
           message: result.message,
           billId: bill.uid,
+          errorStatus: null,
         });
         // Refresh bills list after successful payment
         await refresh();
@@ -120,6 +124,7 @@ function Dashboard() {
           success: false,
           message: result.message,
           billId: bill.uid,
+          errorStatus: (result as any).status || null,
         });
       }
     } catch (err) {
@@ -128,6 +133,7 @@ function Dashboard() {
         success: false,
         message: err instanceof Error ? err.message : 'Payment failed',
         billId: bill.uid,
+        errorStatus: (err as any).status || null,
       });
     }
 
@@ -135,13 +141,22 @@ function Dashboard() {
     // Errors should stay visible until manually dismissed
     if (paymentStatus.success) {
       setTimeout(() => {
-        setPaymentStatus({ loading: false, success: null, message: null, billId: null });
+        setPaymentStatus({ loading: false, success: null, message: null, billId: null, errorStatus: null });
       }, 5000);
     }
   };
 
   const dismissPaymentStatus = () => {
-    setPaymentStatus({ loading: false, success: null, message: null, billId: null });
+    setPaymentStatus({ loading: false, success: null, message: null, billId: null, errorStatus: null });
+  };
+
+  const getErrorHeading = (status: string | null) => {
+    switch (status) {
+      case 'missing_address': return 'Address Required';
+      case 'validation_error': return 'Validation Error';
+      case 'wise_error': return 'Wise API Error';
+      default: return 'Payment Failed';
+    }
   };
 
   const handleCancelPayment = () => {
@@ -234,7 +249,7 @@ function Dashboard() {
                   <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5" />
                 )}
                 <div className="flex-1 min-w-0">
-                  <p className="font-medium">{paymentStatus.success ? 'Payment Successful' : 'Payment Failed'}</p>
+                  <p className="font-medium">{paymentStatus.success ? 'Payment Successful' : getErrorHeading(paymentStatus.errorStatus)}</p>
                   <p className="text-sm mt-1 break-words">{paymentStatus.message}</p>
                 </div>
                 <button
