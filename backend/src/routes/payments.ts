@@ -465,194 +465,83 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
         }
 
         // Create reference: invoice number + last name
-        const lastName = bill.resourceName.split(' ').pop() || 'Payment';
+        const lastName = bill.resourceName.trim().split(/\s+/).pop() || 'Payment';
         const reference = `${bill.externalInvoiceDocNum || bill.uid}-${lastName}`.substring(0, 10);
 
-        // Payment routing priority: Wise-to-Wise (v2 contact) > bank (v1) > email (v1)
-        // Wise-to-Wise contacts (discovered via v2 API) don't appear in v1/accounts,
-        // so we must check for them first via the stored wiseContactId.
+        // =====================================================================
+        // DETERMINISTIC ROUTING: wiseRecipientAccountId is the ONLY source of truth.
+        // No fuzzy matching, no fallback cascades. If the account ID isn't set,
+        // the operator must resolve it on the Wise Recipients page first.
+        // =====================================================================
 
-        let transfer: Awaited<ReturnType<typeof wise.createTransfer>> | undefined;
-        let quote: Awaited<ReturnType<typeof wise.createQuote>> | undefined;
+        const wiseAccountId = recipient.wiseRecipientAccountId;
 
-        // ---------------------------------------------------------------
-        // 1. WISE-TO-WISE TRANSFER (best: direct to recipient's Wise balance)
-        // Check if recipient has a v2 contact with SEND capability
-        // ---------------------------------------------------------------
-        if (recipient.wiseContactId) {
-          try {
-            // Get the recipient's account ID from their contact profile
-            const recipientAccountId = await wise.findRecipientAccountForContact(
-              recipient.wiseContactId, recipient.targetCurrency
-            );
-
-            if (!recipientAccountId) {
-              throw new WiseError(
-                `No payable account found for contact ${recipient.wiseContactId}. ` +
-                `The recipient may need to set up their Wise account for ${recipient.targetCurrency} payments.`
-              );
-            }
-
-            fastify.log.info({
-              contactId: recipient.wiseContactId,
-              recipientAccountId,
-              payeeName: bill.resourceName,
-            }, 'Using Wise-to-Wise transfer (v2 contact)');
-
-            quote = await wise.createQuote(
-              'CAD', recipient.targetCurrency, bill.adjustedBillPayment,
-              recipient.wiseContactId
-            );
-            transfer = await wise.createTransferFromQuote(quote.id, recipientAccountId, reference);
-          } catch (err) {
-            // Wise-to-Wise failed (v2 discovered contacts lack v1 account IDs).
-            // Fall through to v1/accounts path (bank > email with address enrichment).
-            fastify.log.warn({
-              contactId: recipient.wiseContactId,
-              payeeName: bill.resourceName,
-              error: String(err),
-              errorType: err instanceof Error ? err.constructor.name : typeof err,
-            }, 'Wise-to-Wise transfer failed, falling back to v1/accounts');
-          }
-        }
-
-        // ---------------------------------------------------------------
-        // 2. V1/ACCOUNTS ROUTING (fallback: bank > email)
-        // Only if Wise-to-Wise didn't succeed
-        // ---------------------------------------------------------------
-        if (!transfer) {
-          const v1Accounts = await wise.listV1Accounts(recipient.targetCurrency);
-
-          // Match accounts to this recipient by name or email
-          const lastNamePart = bill.resourceName.trim().split(/\s+/).pop()?.toLowerCase() || '';
-          const matchedAccounts = lastNamePart ? v1Accounts.filter(a => {
-            const nameMatch = a.accountHolderName.toLowerCase().includes(lastNamePart);
-            const emailMatch = recipient.wiseEmail &&
-              a.details?.email?.toLowerCase() === recipient.wiseEmail.toLowerCase();
-            return nameMatch || emailMatch;
-          }) : v1Accounts.filter(a => {
-            // No usable name — match by email only
-            return recipient.wiseEmail &&
-              a.details?.email?.toLowerCase() === recipient.wiseEmail.toLowerCase();
+        if (!wiseAccountId) {
+          return reply.status(400).send({
+            success: false,
+            billId,
+            amount: bill.adjustedBillPayment,
+            status: 'no_account',
+            message: `No verified Wise account for "${bill.resourceName}". Go to Wise Recipients and resolve the account mapping.`,
           });
+        }
 
-          const bankAccount = matchedAccounts.find(a => a.type !== 'email' && a.type !== 'wise');
-          const wiseV1Account = matchedAccounts.find(a => a.type === 'wise');
-          const emailAccount = matchedAccounts.find(a => a.type === 'email');
+        // Validate the account still exists in Wise
+        const accountDetails = await wise.getRecipientDetails(wiseAccountId);
+        if (!accountDetails) {
+          return reply.status(400).send({
+            success: false,
+            billId,
+            amount: bill.adjustedBillPayment,
+            status: 'invalid_account',
+            message: `Wise account ${wiseAccountId} no longer exists for "${bill.resourceName}". Re-resolve on Wise Recipients page.`,
+          });
+        }
 
-          fastify.log.info({
-            payeeName: bill.resourceName,
-            contactId: recipient.wiseContactId,
-            matchedAccounts: matchedAccounts.map(a => ({
-              id: a.id, type: a.type, name: a.accountHolderName,
-            })),
-          }, 'Payment routing: v1/accounts fallback');
+        // For email-type accounts, ensure address is present (enrich from PC if needed)
+        if (accountDetails.type === 'email') {
+          const hasAddress = accountDetails.details?.address?.country &&
+            accountDetails.details?.address?.city &&
+            accountDetails.details?.address?.firstLine;
 
-          if (wiseV1Account || bankAccount) {
-            // ---------------------------------------------------------------
-            // BANK OR WISE V1 ACCOUNT (direct deposit — no claim link)
-            // ---------------------------------------------------------------
-            const account = wiseV1Account || bankAccount!;
-            const recipientAccountId = account.id;
+          if (!hasAddress) {
+            const pcUser = await pcClient.getUser(bill.resourceUid);
+            const countryMap: Record<string, string> = {
+              'Canada': 'CA', 'United States': 'US', 'USA': 'US',
+            };
 
-            if (recipientAccountId !== recipient.wiseRecipientAccountId) {
-              await prisma.wiseRecipient.update({
-                where: { qboVendorId: bill.qboVendorId },
-                data: { wiseRecipientAccountId: recipientAccountId },
+            if (pcUser?.Address1 && pcUser?.City && pcUser?.Country) {
+              const countryCode = countryMap[pcUser.Country] || pcUser.Country;
+              await wise.updateRecipientAddress(wiseAccountId, {
+                country: countryCode,
+                city: pcUser.City,
+                postCode: pcUser.PostalCode || pcUser.Zip || '',
+                firstLine: pcUser.Address1 + (pcUser.Address2 ? `, ${pcUser.Address2}` : ''),
               });
-            }
-
-            fastify.log.info({
-              recipientAccountId, accountType: account.type, payeeName: bill.resourceName,
-            }, 'Using v1 account transfer (direct deposit)');
-
-            quote = await wise.createQuote('CAD', recipient.targetCurrency, bill.adjustedBillPayment);
-            transfer = await wise.createTransfer(quote.id, recipientAccountId, reference);
-
-          } else if (emailAccount || recipient.wiseEmail) {
-            // ---------------------------------------------------------------
-            // EMAIL RECIPIENT (last resort — sends claim link, needs address)
-            // ---------------------------------------------------------------
-            let emailRecipientId = emailAccount?.id ?? null;
-
-            // Pre-flight: check address before attempting email transfer
-            if (emailRecipientId) {
-              const recipientDetails = await wise.getRecipientDetails(emailRecipientId);
-              const hasAddress = recipientDetails?.details?.address?.country &&
-                recipientDetails?.details?.address?.city &&
-                recipientDetails?.details?.address?.firstLine;
-
-              if (!hasAddress) {
-                // Try to enrich from PartnerConnect
-                const pcUser = await pcClient.getUser(bill.resourceUid);
-                const countryMap: Record<string, string> = {
-                  'Canada': 'CA', 'United States': 'US', 'USA': 'US',
-                };
-
-                if (pcUser?.Address1 && pcUser?.City && pcUser?.Country) {
-                  const countryCode = countryMap[pcUser.Country] || pcUser.Country;
-                  await wise.updateRecipientAddress(emailRecipientId, {
-                    country: countryCode,
-                    city: pcUser.City,
-                    postCode: pcUser.PostalCode || pcUser.Zip || '',
-                    firstLine: pcUser.Address1 + (pcUser.Address2 ? `, ${pcUser.Address2}` : ''),
-                  });
-                  fastify.log.info({
-                    accountId: emailRecipientId,
-                    payeeName: bill.resourceName,
-                  }, 'Enriched Wise recipient address from PartnerConnect');
-                } else {
-                  return reply.status(400).send({
-                    success: false,
-                    billId,
-                    amount: bill.adjustedBillPayment,
-                    status: 'missing_address',
-                    message: `Wise requires a mailing address for email recipients. Please add an address for "${bill.resourceName}" in PartnerConnect and retry.`,
-                  });
-                }
-              }
-            }
-
-            if (!emailRecipientId && recipient.wiseEmail) {
               fastify.log.info({
-                email: recipient.wiseEmail, payeeName: bill.resourceName,
-              }, 'Creating email recipient (no bank or Wise account found)');
-
-              emailRecipientId = await wise.createEmailRecipient(
-                bill.resourceName, recipient.wiseEmail, recipient.targetCurrency
-              );
-            }
-
-            if (!emailRecipientId) {
+                accountId: wiseAccountId,
+                payeeName: bill.resourceName,
+              }, 'Enriched Wise recipient address from PartnerConnect');
+            } else {
               return reply.status(400).send({
-                success: false, billId, amount: bill.adjustedBillPayment,
-                status: 'invalid_recipient',
-                message: `No valid payment method for "${bill.resourceName}".`,
+                success: false,
+                billId,
+                amount: bill.adjustedBillPayment,
+                status: 'missing_address',
+                message: `Wise requires a mailing address for email recipients. Please add an address for "${bill.resourceName}" in PartnerConnect and retry.`,
               });
             }
-
-            if (emailRecipientId !== recipient.wiseRecipientAccountId) {
-              await prisma.wiseRecipient.update({
-                where: { qboVendorId: bill.qboVendorId },
-                data: { wiseRecipientAccountId: emailRecipientId },
-              });
-            }
-
-            fastify.log.warn({
-              recipientAccountId: emailRecipientId, payeeName: bill.resourceName,
-            }, 'Using email recipient (claim link) — no bank account available');
-
-            quote = await wise.createQuote('CAD', recipient.targetCurrency, bill.adjustedBillPayment);
-            transfer = await wise.createTransfer(quote.id, emailRecipientId, reference);
-
-          } else {
-            return reply.status(400).send({
-              success: false, billId, amount: bill.adjustedBillPayment,
-              status: 'invalid_recipient',
-              message: `No valid payment method for "${bill.resourceName}". Please configure their Wise contact ID or bank details.`,
-            });
           }
         }
+
+        fastify.log.info({
+          wiseAccountId,
+          accountType: accountDetails.type,
+          payeeName: bill.resourceName,
+        }, 'Deterministic payment routing: using verified wiseRecipientAccountId');
+
+        const quote = await wise.createQuote('CAD', recipient.targetCurrency, bill.adjustedBillPayment);
+        const transfer = await wise.createTransfer(quote.id, wiseAccountId, reference);
 
         // Fund the transfer from Wise balance
         const fundResult = await wise.fundTransfer(transfer.id);

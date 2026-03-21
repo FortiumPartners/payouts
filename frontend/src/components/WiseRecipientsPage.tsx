@@ -4,9 +4,9 @@
  */
 
 import { useState, useEffect } from 'react';
-import { Plus, Pencil, Trash2, X, Loader2, ArrowLeft, Search } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, Loader2, ArrowLeft, Search, CheckCircle, AlertCircle, Link2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { api, WiseRecipient, WiseAccount } from '../lib/api';
+import { api, WiseRecipient, WiseAccount, ResolveAccountCandidate } from '../lib/api';
 
 interface RecipientFormData {
   qboVendorId: string;
@@ -298,6 +298,161 @@ function RecipientModal({
   );
 }
 
+function ResolveAccountModal({
+  isOpen,
+  onClose,
+  recipient,
+  onResolved,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  recipient: WiseRecipient | null;
+  onResolved: () => void;
+}) {
+  const [candidates, setCandidates] = useState<ResolveAccountCandidate[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+
+  useEffect(() => {
+    if (isOpen && recipient) {
+      setLoading(true);
+      setError(null);
+      setSearch('');
+      api.resolveWiseAccount(recipient.id)
+        .then(res => setCandidates(res.candidates))
+        .catch(err => setError(err instanceof Error ? err.message : 'Failed to load accounts'))
+        .finally(() => setLoading(false));
+    }
+  }, [isOpen, recipient]);
+
+  if (!isOpen || !recipient) return null;
+
+  const handleSelect = async (accountId: number) => {
+    setSaving(accountId);
+    setError(null);
+    try {
+      await api.updateWiseRecipient(recipient.id, { wiseRecipientAccountId: accountId });
+      onResolved();
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save');
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const handleClear = async () => {
+    setSaving(-1);
+    setError(null);
+    try {
+      await api.updateWiseRecipient(recipient.id, { wiseRecipientAccountId: null });
+      onResolved();
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to clear');
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const filtered = candidates.filter(c => {
+    const q = search.toLowerCase();
+    if (!q) return true;
+    return c.accountHolderName.toLowerCase().includes(q) ||
+      (c.email?.toLowerCase().includes(q)) ||
+      String(c.id).includes(q);
+  });
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white border rounded-lg shadow-lg w-full max-w-lg mx-4 max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between px-6 py-4 border-b">
+          <div>
+            <h2 className="text-lg font-semibold">Resolve Wise Account</h2>
+            <p className="text-sm text-muted-foreground">{recipient.payeeName}</p>
+          </div>
+          <button onClick={onClose} className="p-1 hover:bg-muted rounded">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="p-4 border-b">
+          {error && (
+            <div className="p-3 mb-3 rounded bg-red-50 border border-red-200 text-red-800 text-sm">
+              {error}
+            </div>
+          )}
+          <div className="relative">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-10 pr-3 py-2 border rounded-md bg-background text-sm"
+              placeholder="Filter accounts..."
+            />
+          </div>
+          {recipient.wiseRecipientAccountId && (
+            <button
+              onClick={handleClear}
+              disabled={saving !== null}
+              className="mt-2 text-xs text-red-600 hover:text-red-800"
+            >
+              Clear current mapping (ID: {recipient.wiseRecipientAccountId})
+            </button>
+          )}
+        </div>
+
+        <div className="overflow-y-auto flex-1">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground text-sm">
+              No matching accounts found
+            </div>
+          ) : (
+            filtered.map(c => (
+              <button
+                key={c.id}
+                onClick={() => handleSelect(c.id)}
+                disabled={saving !== null}
+                className={`w-full px-6 py-3 text-left border-b hover:bg-muted/50 flex items-center justify-between ${
+                  c.id === recipient.wiseRecipientAccountId ? 'bg-green-50' : ''
+                }`}
+              >
+                <div>
+                  <div className="font-medium text-sm">
+                    {c.accountHolderName}
+                    {c.isExactEmailMatch && (
+                      <span className="ml-2 text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-800">
+                        email match
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-0.5">
+                    ID: {c.id} · {c.type} · {c.currency}
+                    {c.email && ` · ${c.email}`}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {c.id === recipient.wiseRecipientAccountId && (
+                    <CheckCircle className="h-4 w-4 text-green-600" />
+                  )}
+                  {saving === c.id && <Loader2 className="h-4 w-4 animate-spin" />}
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function WiseRecipientsPage() {
   const [recipients, setRecipients] = useState<WiseRecipient[]>([]);
   const [loading, setLoading] = useState(true);
@@ -307,6 +462,7 @@ export function WiseRecipientsPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [wiseAccounts, setWiseAccounts] = useState<WiseAccount[]>([]);
   const [loadingAccounts, setLoadingAccounts] = useState(false);
+  const [resolvingRecipient, setResolvingRecipient] = useState<WiseRecipient | null>(null);
 
   const loadRecipients = async () => {
     try {
@@ -391,7 +547,7 @@ export function WiseRecipientsPage() {
         <div className="rounded-lg border bg-card">
           <div className="border-b px-6 py-4">
             <p className="text-sm text-muted-foreground">
-              Map PartnerConnect payee names to their Wise email addresses for Canada payments.
+              Map PartnerConnect payees to verified Wise accounts. Each recipient must have a resolved Account ID to be payable.
             </p>
           </div>
 
@@ -415,17 +571,33 @@ export function WiseRecipientsPage() {
               <table className="w-full">
                 <thead className="bg-muted/50">
                   <tr>
+                    <th className="px-6 py-3 text-left text-sm font-medium">Status</th>
                     <th className="px-6 py-3 text-left text-sm font-medium">Payee Name</th>
                     <th className="px-6 py-3 text-left text-sm font-medium">QBO Vendor</th>
                     <th className="px-6 py-3 text-left text-sm font-medium">Wise Email</th>
                     <th className="px-6 py-3 text-left text-sm font-medium">Currency</th>
-                    <th className="px-6 py-3 text-left text-sm font-medium">Contact ID</th>
+                    <th className="px-6 py-3 text-left text-sm font-medium">Account ID</th>
                     <th className="px-6 py-3 text-right text-sm font-medium">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {recipients.map((recipient) => (
-                    <tr key={recipient.id} className="border-b hover:bg-muted/50">
+                    <tr key={recipient.id} className={`border-b hover:bg-muted/50 ${
+                      !recipient.wiseRecipientAccountId ? 'bg-red-50/50' : ''
+                    }`}>
+                      <td className="px-6 py-4">
+                        {recipient.wiseRecipientAccountId ? (
+                          <span className="flex items-center gap-1 text-green-600" title={`Account ID: ${recipient.wiseRecipientAccountId}`}>
+                            <CheckCircle className="h-4 w-4" />
+                            <span className="text-xs font-medium">Payable</span>
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-1 text-red-600" title="No verified Wise account — cannot pay">
+                            <AlertCircle className="h-4 w-4" />
+                            <span className="text-xs font-medium">Unresolved</span>
+                          </span>
+                        )}
+                      </td>
                       <td className="px-6 py-4 font-medium">{recipient.payeeName}</td>
                       <td className="px-6 py-4 font-mono text-xs text-muted-foreground">{recipient.qboVendorId}</td>
                       <td className="px-6 py-4">{recipient.wiseEmail || <span className="text-muted-foreground">—</span>}</td>
@@ -438,11 +610,22 @@ export function WiseRecipientsPage() {
                           {recipient.targetCurrency}
                         </span>
                       </td>
-                      <td className="px-6 py-4 font-mono text-sm text-muted-foreground">
-                        {recipient.wiseContactId || '—'}
+                      <td className="px-6 py-4 font-mono text-xs text-muted-foreground">
+                        {recipient.wiseRecipientAccountId || '—'}
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-2">
+                          <button
+                            onClick={() => setResolvingRecipient(recipient)}
+                            className={`p-2 rounded-md ${
+                              recipient.wiseRecipientAccountId
+                                ? 'hover:bg-muted'
+                                : 'hover:bg-red-100 text-red-600'
+                            }`}
+                            title="Resolve Wise Account"
+                          >
+                            <Link2 className="h-4 w-4" />
+                          </button>
                           <button
                             onClick={() => handleEdit(recipient)}
                             className="p-2 hover:bg-muted rounded-md"
@@ -485,7 +668,15 @@ export function WiseRecipientsPage() {
         </div>
       </main>
 
-      {/* Modal */}
+      {/* Resolve Account Modal */}
+      <ResolveAccountModal
+        isOpen={!!resolvingRecipient}
+        onClose={() => setResolvingRecipient(null)}
+        recipient={resolvingRecipient}
+        onResolved={loadRecipients}
+      />
+
+      {/* Add/Edit Modal */}
       <RecipientModal
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}

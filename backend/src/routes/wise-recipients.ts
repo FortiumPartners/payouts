@@ -17,6 +17,7 @@ const wiseRecipientSchema = z.object({
   wiseEmail: z.string(),  // May be empty for Wise-to-Wise contacts
   targetCurrency: z.string(),
   wiseContactId: z.string().nullable(),
+  wiseRecipientAccountId: z.number().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -37,6 +38,7 @@ const createRecipientSchema = z.object({
 const updateRecipientSchema = z.object({
   wiseEmail: z.string().email('Valid email is required').optional(),
   targetCurrency: z.enum(['USD', 'CAD']).optional(),
+  wiseRecipientAccountId: z.number().nullable().optional(),
 });
 
 export const wiseRecipientsRoutes: FastifyPluginAsync = async (fastify) => {
@@ -267,8 +269,28 @@ export const wiseRecipientsRoutes: FastifyPluginAsync = async (fastify) => {
     const updates = request.body as z.infer<typeof updateRecipientSchema>;
 
     try {
+      // If setting wiseRecipientAccountId, validate it exists in Wise
+      if (updates.wiseRecipientAccountId) {
+        const wise = getWiseClient();
+        if (!wise.isConfigured()) {
+          return reply.status(503).send({
+            error: 'Wise not configured',
+            message: 'Cannot validate account: Wise API not configured',
+            statusCode: 503,
+          });
+        }
+        const account = await wise.getRecipientDetails(updates.wiseRecipientAccountId);
+        if (!account) {
+          return reply.status(400).send({
+            error: 'Invalid account',
+            message: `Wise account ${updates.wiseRecipientAccountId} does not exist`,
+            statusCode: 400,
+          });
+        }
+      }
+
       // Clear cached contact ID if email changes
-      const data: Record<string, string | null> = { ...updates };
+      const data: Record<string, string | number | null> = { ...updates };
       if (updates.wiseEmail) {
         data.wiseContactId = null;
       }
@@ -293,6 +315,94 @@ export const wiseRecipientsRoutes: FastifyPluginAsync = async (fastify) => {
       }
       throw err;
     }
+  });
+
+  /**
+   * GET /api/wise-recipients/:id/resolve-account - Discover candidate Wise accounts
+   * Returns matching v1 accounts for an operator to pick from.
+   */
+  fastify.get('/:id/resolve-account', {
+    schema: {
+      params: z.object({
+        id: z.string(),
+      }),
+      response: {
+        200: z.object({
+          recipient: z.object({
+            id: z.string(),
+            payeeName: z.string(),
+            wiseEmail: z.string(),
+            targetCurrency: z.string(),
+            currentAccountId: z.number().nullable(),
+          }),
+          candidates: z.array(z.object({
+            id: z.number(),
+            accountHolderName: z.string(),
+            type: z.string(),
+            currency: z.string(),
+            email: z.string().nullable(),
+            isExactEmailMatch: z.boolean(),
+          })),
+        }),
+      },
+    },
+  }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const wise = getWiseClient();
+
+    if (!wise.isConfigured()) {
+      return reply.status(503).send({
+        error: 'Wise not configured',
+        message: 'Wise API token is not configured',
+        statusCode: 503,
+      });
+    }
+
+    const recipient = await prisma.wiseRecipient.findUnique({ where: { id } });
+    if (!recipient) {
+      return reply.status(404).send({
+        error: 'Not found',
+        message: 'Recipient not found',
+        statusCode: 404,
+      });
+    }
+
+    const v1Accounts = await wise.listV1Accounts(recipient.targetCurrency);
+
+    const candidates = v1Accounts.map(a => {
+      const email = a.details?.email || null;
+      const isExactEmailMatch = !!(
+        recipient.wiseEmail &&
+        email &&
+        email.toLowerCase() === recipient.wiseEmail.toLowerCase()
+      );
+      return {
+        id: a.id,
+        accountHolderName: a.accountHolderName,
+        type: a.type,
+        currency: a.currency,
+        email,
+        isExactEmailMatch,
+      };
+    });
+
+    // Sort: exact email matches first, then alphabetical
+    candidates.sort((a, b) => {
+      if (a.isExactEmailMatch && !b.isExactEmailMatch) return -1;
+      if (!a.isExactEmailMatch && b.isExactEmailMatch) return 1;
+      return a.accountHolderName.localeCompare(b.accountHolderName);
+    });
+
+    return {
+      recipient: {
+        id: recipient.id,
+        payeeName: recipient.payeeName,
+        wiseEmail: recipient.wiseEmail,
+        targetCurrency: recipient.targetCurrency,
+        currentAccountId: recipient.wiseRecipientAccountId,
+      },
+      candidates,
+    };
   });
 
   /**

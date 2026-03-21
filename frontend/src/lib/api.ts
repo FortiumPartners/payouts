@@ -75,8 +75,29 @@ export interface WiseRecipient {
   wiseEmail: string;
   targetCurrency: string;
   wiseContactId: string | null;
+  wiseRecipientAccountId: number | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ResolveAccountCandidate {
+  id: number;
+  accountHolderName: string;
+  type: string;
+  currency: string;
+  email: string | null;
+  isExactEmailMatch: boolean;
+}
+
+export interface ResolveAccountResponse {
+  recipient: {
+    id: string;
+    payeeName: string;
+    wiseEmail: string;
+    targetCurrency: string;
+    currentAccountId: number | null;
+  };
+  candidates: ResolveAccountCandidate[];
 }
 
 export interface PaymentHistoryItem {
@@ -314,12 +335,16 @@ class ApiClient {
 
   async updateWiseRecipient(
     id: string,
-    data: { wiseEmail?: string; targetCurrency?: 'USD' | 'CAD' }
+    data: { wiseEmail?: string; targetCurrency?: 'USD' | 'CAD'; wiseRecipientAccountId?: number | null }
   ): Promise<WiseRecipient> {
     return this.request(`/wise-recipients/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     });
+  }
+
+  async resolveWiseAccount(id: string): Promise<ResolveAccountResponse> {
+    return this.request(`/wise-recipients/${id}/resolve-account`);
   }
 
   async deleteWiseRecipient(id: string): Promise<void> {
