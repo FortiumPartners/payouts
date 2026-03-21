@@ -505,15 +505,14 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
             );
             transfer = await wise.createTransferFromQuote(quote.id, recipientAccountId, reference);
           } catch (err) {
-            // If recipient has a wiseContactId, they're a Wise-to-Wise contact.
-            // Don't fall back to email — surface the error so we can fix the root cause.
-            fastify.log.error({
+            // Wise-to-Wise failed (v2 discovered contacts lack v1 account IDs).
+            // Fall through to v1/accounts path (bank > email with address enrichment).
+            fastify.log.warn({
               contactId: recipient.wiseContactId,
               payeeName: bill.resourceName,
               error: String(err),
               errorType: err instanceof Error ? err.constructor.name : typeof err,
-            }, 'Wise-to-Wise transfer failed');
-            throw err;
+            }, 'Wise-to-Wise transfer failed, falling back to v1/accounts');
           }
         }
 
