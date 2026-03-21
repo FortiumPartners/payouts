@@ -826,8 +826,18 @@ export class WiseClient {
     firstLine: string;
   }): Promise<void> {
     console.log(`[Wise] Updating address for account ${accountId}:`, address);
+
+    // GET current account to preserve all required fields
+    const existing = await this.request<Record<string, unknown>>('GET', `/v1/accounts/${accountId}`);
+    const existingDetails = (existing.details || {}) as Record<string, unknown>;
+
+    // PUT with full payload, merging address into existing details
     await this.request('PUT', `/v1/accounts/${accountId}`, {
+      accountHolderName: existing.accountHolderName,
+      currency: existing.currency,
+      type: existing.type,
       details: {
+        ...existingDetails,
         address,
       },
     } as Record<string, unknown>);
