@@ -524,13 +524,16 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
           const v1Accounts = await wise.listV1Accounts(recipient.targetCurrency);
 
           // Match accounts to this recipient by name or email
-          const matchedAccounts = v1Accounts.filter(a => {
-            const nameMatch = a.accountHolderName.toLowerCase().includes(
-              bill.resourceName.split(' ').pop()!.toLowerCase()
-            );
+          const lastNamePart = bill.resourceName.trim().split(/\s+/).pop()?.toLowerCase() || '';
+          const matchedAccounts = lastNamePart ? v1Accounts.filter(a => {
+            const nameMatch = a.accountHolderName.toLowerCase().includes(lastNamePart);
             const emailMatch = recipient.wiseEmail &&
               a.details?.email?.toLowerCase() === recipient.wiseEmail.toLowerCase();
             return nameMatch || emailMatch;
+          }) : v1Accounts.filter(a => {
+            // No usable name — match by email only
+            return recipient.wiseEmail &&
+              a.details?.email?.toLowerCase() === recipient.wiseEmail.toLowerCase();
           });
 
           const bankAccount = matchedAccounts.find(a => a.type !== 'email' && a.type !== 'wise');
