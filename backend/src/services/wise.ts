@@ -21,6 +21,28 @@ export class WiseError extends Error {
   }
 }
 
+export class WiseValidationError extends WiseError {
+  public details: Array<{ code: string; message: string }>;
+
+  private static friendlyMessages: Record<string, string> = {
+    'validation.failure.address.country.empty': 'Recipient is missing country',
+    'validation.failure.address.postCode.empty': 'Recipient is missing postal code',
+    'validation.failure.address.firstLine.empty': 'Recipient is missing street address',
+    'validation.failure.address.city.empty': 'Recipient is missing city',
+  };
+
+  constructor(details: Array<{ code: string; message: string }>, statusCode?: number) {
+    const friendlyDetails = details.map(d => ({
+      code: d.code,
+      message: WiseValidationError.friendlyMessages[d.code] || d.message,
+    }));
+    const message = friendlyDetails.map(d => d.message).join('; ');
+    super(message, statusCode);
+    this.name = 'WiseValidationError';
+    this.details = friendlyDetails;
+  }
+}
+
 export class WiseAuthError extends WiseError {
   constructor(message: string) {
     super(message, 401);
@@ -287,9 +309,22 @@ export class WiseClient {
         errorMessage = errorBody.message || errorBody.errors?.[0]?.message || errorMessage;
         if (errorBody.errors && errorBody.errors.length > 0) {
           errorDetails = errorBody.errors.map(e => `${e.code || ''}: ${e.message} ${e.path ? `(${e.path})` : ''}`).join('; ');
+
+          // Check for address validation errors
+          const addressErrors = errorBody.errors.filter(e =>
+            e.code?.startsWith('validation.failure.address.')
+          );
+          if (addressErrors.length > 0) {
+            console.error(`[Wise] Address validation error on ${path}:`, JSON.stringify(errorBody, null, 2));
+            throw new WiseValidationError(
+              addressErrors.map(e => ({ code: e.code || '', message: e.message })),
+              response.status
+            );
+          }
         }
         console.error(`[Wise] API Error on ${path}:`, JSON.stringify(errorBody, null, 2));
-      } catch {
+      } catch (parseErr) {
+        if (parseErr instanceof WiseValidationError) throw parseErr;
         // Ignore JSON parse errors
       }
       throw new WiseError(errorDetails || errorMessage, response.status);
@@ -757,6 +792,45 @@ export class WiseClient {
 
     console.log(`[Wise] Found ${balances.length} balance(s)`);
     return balances;
+  }
+
+  /**
+   * Get recipient account details by ID.
+   * Returns the full account including address info.
+   */
+  async getRecipientDetails(accountId: number): Promise<{
+    id: number;
+    type: string;
+    details: {
+      address?: {
+        country?: string;
+        city?: string;
+        postCode?: string;
+        firstLine?: string;
+      };
+      [key: string]: unknown;
+    };
+  } | null> {
+    return this.request('GET', `/v1/accounts/${accountId}`);
+  }
+
+  /**
+   * Update a recipient account's address.
+   * Used to enrich email-type recipients that are missing address details.
+   */
+  async updateRecipientAddress(accountId: number, address: {
+    country: string;
+    city: string;
+    postCode: string;
+    firstLine: string;
+  }): Promise<void> {
+    console.log(`[Wise] Updating address for account ${accountId}:`, address);
+    await this.request('PUT', `/v1/accounts/${accountId}`, {
+      details: {
+        address,
+      },
+    } as Record<string, unknown>);
+    console.log(`[Wise] Address updated for account ${accountId}`);
   }
 
   /**
