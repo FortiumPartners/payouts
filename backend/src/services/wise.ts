@@ -713,18 +713,19 @@ export class WiseClient {
 
   /**
    * Create a transfer for Wise-to-Wise contacts.
-   * Uses v1/transfers but omits targetAccount since it's embedded in the quote.
    * @param quoteId Quote ID from createQuote (must have targetContactId embedded)
+   * @param targetAccountId Recipient account ID from getContactAccounts/findRecipientAccountForContact
    * @param reference Payment reference (max 10 chars)
    */
   async createTransferFromQuote(
     quoteId: string,
+    targetAccountId: number,
     reference: string
   ): Promise<WiseTransfer> {
-    console.log(`[Wise] Creating Wise-to-Wise transfer: quote=${quoteId}, ref=${reference}`);
+    console.log(`[Wise] Creating Wise-to-Wise transfer: quote=${quoteId}, targetAccount=${targetAccountId}, ref=${reference}`);
 
-    // v1/transfers - when quote has targetContactId, targetAccount is not required
     const transfer = await this.request<WiseTransfer>('POST', `/v1/transfers`, {
+      targetAccount: targetAccountId,
       quoteUuid: quoteId,
       customerTransactionId: crypto.randomUUID(),
       details: {

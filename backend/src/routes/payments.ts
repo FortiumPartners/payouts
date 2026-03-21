@@ -481,24 +481,29 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
         // ---------------------------------------------------------------
         if (recipient.wiseContactId) {
           try {
-            const contactAccounts = await wise.getContactAccounts(recipient.wiseContactId);
-            const hasWiseToWise = contactAccounts.length > 0 ||
-              // Even without sub-accounts, a discovered contact can receive via quote
-              true; // If wiseContactId exists, it was discovered — try Wise-to-Wise
+            // Get the recipient's account ID from their contact profile
+            const recipientAccountId = await wise.findRecipientAccountForContact(
+              recipient.wiseContactId, recipient.targetCurrency
+            );
 
-            if (hasWiseToWise) {
-              fastify.log.info({
-                contactId: recipient.wiseContactId,
-                payeeName: bill.resourceName,
-                contactAccounts: contactAccounts.length,
-              }, 'Using Wise-to-Wise transfer (v2 contact)');
-
-              quote = await wise.createQuote(
-                'CAD', recipient.targetCurrency, bill.adjustedBillPayment,
-                recipient.wiseContactId
+            if (!recipientAccountId) {
+              throw new WiseError(
+                `No payable account found for contact ${recipient.wiseContactId}. ` +
+                `The recipient may need to set up their Wise account for ${recipient.targetCurrency} payments.`
               );
-              transfer = await wise.createTransferFromQuote(quote.id, reference);
             }
+
+            fastify.log.info({
+              contactId: recipient.wiseContactId,
+              recipientAccountId,
+              payeeName: bill.resourceName,
+            }, 'Using Wise-to-Wise transfer (v2 contact)');
+
+            quote = await wise.createQuote(
+              'CAD', recipient.targetCurrency, bill.adjustedBillPayment,
+              recipient.wiseContactId
+            );
+            transfer = await wise.createTransferFromQuote(quote.id, recipientAccountId, reference);
           } catch (err) {
             // If recipient has a wiseContactId, they're a Wise-to-Wise contact.
             // Don't fall back to email — surface the error so we can fix the root cause.
