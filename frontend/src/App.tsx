@@ -9,8 +9,8 @@ import { PaymentConfirmationModal } from './components/PaymentConfirmationModal'
 import { WiseRecipientsPage } from './components/WiseRecipientsPage';
 import { IntegrationStatusPanel } from './components/IntegrationStatus';
 import { DismissConfirmationModal } from './components/DismissConfirmationModal';
-import { Bill, DismissedBill, api, getAuthUrl } from './lib/api';
-import { useState, useEffect } from 'react';
+import { Bill, BillDetails, DismissedBill, api, getAuthUrl } from './lib/api';
+import { useState, useEffect, useCallback } from 'react';
 
 function Dashboard() {
   const { user, logout } = useAuth();
@@ -32,6 +32,8 @@ function Dashboard() {
   const [showDismissed, setShowDismissed] = useState(false);
   const [dismissedBills, setDismissedBills] = useState<DismissedBill[]>([]);
   const [apiStartedAt, setApiStartedAt] = useState<string | null>(null);
+  const [billDetailsCache, setBillDetailsCache] = useState<Map<string, BillDetails>>(new Map());
+  const [detailsLoading, setDetailsLoading] = useState<Set<string>>(new Set());
 
   const loadDismissedBills = async () => {
     try {
@@ -41,6 +43,25 @@ function Dashboard() {
       // Silently fail — dismissed bills are secondary
     }
   };
+
+  const handleLoadDetails = useCallback(async (billId: string) => {
+    // Skip if already cached or loading
+    if (billDetailsCache.has(billId) || detailsLoading.has(billId)) return;
+
+    setDetailsLoading(prev => new Set(prev).add(billId));
+    try {
+      const details = await api.getBillDetails(billId);
+      setBillDetailsCache(prev => new Map(prev).set(billId, details));
+    } catch (err) {
+      console.error('Failed to load bill details:', err);
+    } finally {
+      setDetailsLoading(prev => {
+        const next = new Set(prev);
+        next.delete(billId);
+        return next;
+      });
+    }
+  }, [billDetailsCache, detailsLoading]);
 
   useEffect(() => {
     loadDismissedBills();
@@ -353,7 +374,8 @@ function Dashboard() {
             error={error}
             viewMode={viewMode}
             controlStates={controlStates}
-            detailsCache={new Map()}
+            detailsCache={billDetailsCache}
+            onLoadDetails={handleLoadDetails}
             onPayBill={handlePayBill}
             onDismissBill={handleDismissBill}
           />
