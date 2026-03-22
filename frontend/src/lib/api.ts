@@ -33,6 +33,16 @@ export interface Bill {
   billComId: string | null;
   controls: ControlResult[];
   readyToPay: boolean;
+  trxDate: string | null;
+  dueDate: string | null;
+}
+
+export interface BillDetails {
+  qboBillDueDate: string | null;
+  qboPaidDate: string | null;
+  wiseRecipientName: string | null;
+  wisePaymentMethod: 'wise-to-wise' | 'bank' | 'email' | null;
+  lastPayment: { amount: number; paidAt: string } | null;
 }
 
 export interface BillsResponse {
@@ -213,6 +223,10 @@ class ApiClient {
 
   async getBill(id: string): Promise<Bill> {
     return this.request<Bill>(`/bills/${id}`);
+  }
+
+  async getBillDetails(id: string): Promise<BillDetails> {
+    return this.request<BillDetails>(`/bills/${id}/details`);
   }
 
   async checkBillControls(billIds: string[]): Promise<{
