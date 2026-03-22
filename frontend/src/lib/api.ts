@@ -256,6 +256,7 @@ class ApiClient {
   async restoreBill(billId: string): Promise<{ success: boolean; billId: string }> {
     return this.request(`/bills/${billId}/restore`, {
       method: 'POST',
+      body: JSON.stringify({}),
     });
   }
 
