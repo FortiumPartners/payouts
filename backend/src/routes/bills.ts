@@ -9,6 +9,7 @@ import { prisma } from '../lib/prisma.js';
 import { getPartnerConnectClient, PCBill } from '../services/partnerconnect.js';
 import { runControlChecks, ControlCheckResults } from '../services/controls.js';
 import { requireAuth } from './auth.js';
+import { getFpqboClient, FpqboError } from '../services/fpqbo.js';
 
 // Response schemas
 const billWithControlsSchema = z.object({
@@ -22,6 +23,8 @@ const billWithControlsSchema = z.object({
   qboInvoiceNum: z.string().nullable(),
   qboBillNum: z.string().nullable(),
   billComId: z.string().nullable(),
+  trxDate: z.string().nullable(),
+  dueDate: z.string().nullable(),
   controls: z.array(z.object({
     name: z.string(),
     passed: z.boolean(),
@@ -50,6 +53,8 @@ export interface BillWithControls {
   qboInvoiceNum: string | null;
   qboBillNum: string | null;
   billComId: string | null;
+  trxDate: string | null;
+  dueDate: string | null;
   controls: { name: string; passed: boolean; reason?: string }[];
   readyToPay: boolean;
 }
@@ -128,6 +133,8 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
           qboInvoiceNum: bill.externalInvoiceDocNum || null,
           qboBillNum: bill.externalBillDocNum || null,
           billComId: tenantType === 'US' ? (bill.externalBillId || null) : null,
+          trxDate: bill.trxDate ? bill.trxDate.toISOString() : null,
+          dueDate: bill.dueDate ? bill.dueDate.toISOString() : null,
           controls: [], // Controls loaded on-demand
           readyToPay: false, // Unknown until controls checked
         };
@@ -403,6 +410,8 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
         qboInvoiceNum: bill.externalInvoiceDocNum || null,
         qboBillNum: bill.externalBillDocNum || null,
         billComId: tenantType === 'US' ? (bill.externalBillId || null) : null,
+        trxDate: bill.trxDate ? bill.trxDate.toISOString() : null,
+        dueDate: bill.dueDate ? bill.dueDate.toISOString() : null,
         controls: controlResults.controls.map(c => ({
           name: c.name,
           passed: c.passed,
