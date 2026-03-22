@@ -42,6 +42,17 @@ const billsResponseSchema = z.object({
   }),
 });
 
+const billDetailsSchema = z.object({
+  qboBillDueDate: z.string().nullable(),
+  qboPaidDate: z.string().nullable(),
+  wiseRecipientName: z.string().nullable(),
+  wisePaymentMethod: z.enum(['wise-to-wise', 'bank', 'email']).nullable(),
+  lastPayment: z.object({
+    amount: z.number(),
+    paidAt: z.string(),
+  }).nullable(),
+});
+
 export interface BillWithControls {
   uid: string;
   description: string;
@@ -359,6 +370,114 @@ export const billsRoutes: FastifyPluginAsync = async (fastify) => {
     }));
 
     return { results };
+  });
+
+  /**
+   * GET /api/bills/:id/details - Lazy-loaded enrichment data for a single bill.
+   * Returns QBO dates, Wise recipient info, and payment history.
+   * Each enrichment is independent — one failure doesn't block others.
+   */
+  fastify.get('/:id/details', {
+    schema: {
+      params: z.object({ id: z.string() }),
+      response: { 200: billDetailsSchema },
+    },
+  }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const pcClient = getPartnerConnectClient();
+
+    if (!pcClient.isConfigured()) {
+      return reply.status(503).send({
+        error: 'PartnerConnect not configured',
+        message: 'API credentials not set',
+        statusCode: 503,
+      });
+    }
+
+    // Fetch the bill from PC to get tenant, QBO IDs, payee info
+    const bill = await pcClient.getBill(id);
+    const isCanada = ['CA', 'CAN', 'Canada'].includes(bill.tenantCode);
+    const tenantType: 'US' | 'CA' = isCanada ? 'CA' : 'US';
+
+    // Result — each field starts null, enriched independently
+    let qboBillDueDate: string | null = null;
+    let qboPaidDate: string | null = null;
+    let wiseRecipientName: string | null = null;
+    let wisePaymentMethod: 'wise-to-wise' | 'bank' | 'email' | null = null;
+    let lastPayment: { amount: number; paidAt: string } | null = null;
+
+    // 1. QBO enrichment — bill due date + BillPayment date
+    if (bill.externalBillId) {
+      try {
+        const fpqbo = getFpqboClient(tenantType);
+        const qboBill = await fpqbo.getBill(bill.externalBillId);
+        qboBillDueDate = qboBill.dueDate ? qboBill.dueDate.toISOString() : null;
+
+        // Check for BillPayment
+        try {
+          const payments = await fpqbo.getBillPaymentsForBill(bill.externalBillId);
+          if (payments.length > 0) {
+            qboPaidDate = payments[0].txnDate || null;
+          }
+        } catch (bpErr) {
+          // BillPayment lookup failed — not critical
+          if (!(bpErr instanceof FpqboError && bpErr.isNotFound)) {
+            fastify.log.warn({ billId: id, err: bpErr }, 'Failed to fetch QBO BillPayments');
+          }
+        }
+      } catch (err) {
+        fastify.log.warn({ billId: id, err }, 'Failed to fetch QBO bill for enrichment');
+      }
+    }
+
+    // 2. Wise recipient enrichment (CA only)
+    if (isCanada && bill.qboVendorId) {
+      try {
+        const recipient = await prisma.wiseRecipient.findUnique({
+          where: { qboVendorId: bill.qboVendorId },
+        });
+        if (recipient) {
+          wiseRecipientName = recipient.payeeName;
+          if (recipient.wiseContactId) {
+            wisePaymentMethod = 'wise-to-wise';
+          } else if (recipient.wiseRecipientAccountId) {
+            wisePaymentMethod = 'bank';
+          } else {
+            wisePaymentMethod = 'email';
+          }
+        }
+      } catch (err) {
+        fastify.log.warn({ billId: id, err }, 'Failed to fetch Wise recipient');
+      }
+    }
+
+    // 3. Last payment for this payee
+    try {
+      const lastPaid = await prisma.paymentRecord.findFirst({
+        where: {
+          payeeVendorId: bill.qboVendorId || undefined,
+          status: 'paid',
+        },
+        orderBy: { paidAt: 'desc' },
+        select: { amount: true, paidAt: true },
+      });
+      if (lastPaid && lastPaid.paidAt) {
+        lastPayment = {
+          amount: Number(lastPaid.amount),
+          paidAt: lastPaid.paidAt.toISOString(),
+        };
+      }
+    } catch (err) {
+      fastify.log.warn({ billId: id, err }, 'Failed to fetch last payment');
+    }
+
+    return {
+      qboBillDueDate,
+      qboPaidDate,
+      wiseRecipientName,
+      wisePaymentMethod,
+      lastPayment,
+    };
   });
 
   /**
