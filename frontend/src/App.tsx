@@ -353,6 +353,7 @@ function Dashboard() {
             error={error}
             viewMode={viewMode}
             controlStates={controlStates}
+            detailsCache={new Map()}
             onPayBill={handlePayBill}
             onDismissBill={handleDismissBill}
           />

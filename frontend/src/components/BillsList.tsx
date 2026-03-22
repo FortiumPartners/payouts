@@ -6,7 +6,7 @@
 
 import { useState, useMemo } from 'react';
 import { Check, X, ChevronDown, ChevronUp, Loader2, Users, List, Building2, FileSpreadsheet, CreditCard, Settings2 } from 'lucide-react';
-import { Bill, ControlResult } from '../lib/api';
+import { Bill, BillDetails, ControlResult } from '../lib/api';
 import { BillControlStatus } from './BillControlStatus';
 import { BillControlState } from '../hooks/useBillControls';
 
@@ -140,8 +140,10 @@ interface BillsListProps {
   error: string | null;
   viewMode: ViewMode;
   controlStates: Map<string, BillControlState>;
+  detailsCache: Map<string, BillDetails>;
   onPayBill?: (bill: Bill) => void;
   onDismissBill?: (bill: Bill) => void;
+  onLoadDetails?: (billId: string) => void;
 }
 
 interface PayeeGroup {
@@ -167,16 +169,35 @@ function formatAmount(amount: number): string {
   }).format(amount);
 }
 
+function getAgingInfo(trxDate: string | null): { days: number; color: string; bgColor: string } | null {
+  if (!trxDate) return null;
+  const days = Math.floor((Date.now() - new Date(trxDate).getTime()) / (1000 * 60 * 60 * 24));
+  if (days < 30) return { days, color: 'text-green-800', bgColor: 'bg-green-100' };
+  if (days <= 60) return { days, color: 'text-yellow-800', bgColor: 'bg-yellow-100' };
+  return { days, color: 'text-red-800', bgColor: 'bg-red-100' };
+}
+
+function formatDate(iso: string | null): string {
+  if (!iso) return '-';
+  return new Date(iso).toLocaleDateString('en-CA'); // YYYY-MM-DD format
+}
+
 /** Individual bill row for list view */
 function BillRow({
   bill,
   controlState,
+  details,
+  detailsLoading,
+  onExpand,
   onPay,
   onDismiss,
   indented = false,
 }: {
   bill: Bill;
   controlState?: BillControlState;
+  details?: BillDetails;
+  detailsLoading?: boolean;
+  onExpand?: (billId: string) => void;
   onPay?: (bill: Bill) => void;
   onDismiss?: (bill: Bill) => void;
   indented?: boolean;
@@ -184,7 +205,11 @@ function BillRow({
   const [expanded, setExpanded] = useState(false);
 
   const handleExpand = () => {
-    setExpanded(!expanded);
+    const willExpand = !expanded;
+    setExpanded(willExpand);
+    if (willExpand) {
+      onExpand?.(bill.uid);
+    }
   };
 
   // Use controls from controlState if available, otherwise from bill
@@ -320,7 +345,7 @@ function BillRow({
                 <div className="space-y-3">
                   {/* PartnerConnect */}
                   <div className="text-sm">
-                    <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">PartnerConnect</div>
+                    <div className="text-xs font-semibold text-indigo-600 uppercase tracking-wide mb-1">PartnerConnect</div>
                     <dl className="space-y-0.5">
                       <div>
                         <dt className="text-muted-foreground inline">Bill: </dt>
@@ -330,12 +355,20 @@ function BillRow({
                         <dt className="text-muted-foreground inline">Status: </dt>
                         <dd className="inline">{bill.status}</dd>
                       </div>
+                      <div>
+                        <dt className="text-muted-foreground inline">Trx Date: </dt>
+                        <dd className="inline font-medium">{formatDate(bill.trxDate)}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground inline">Due Date: </dt>
+                        <dd className="inline font-medium">{formatDate(bill.dueDate)}</dd>
+                      </div>
                     </dl>
                   </div>
 
                   {/* QuickBooks */}
                   <div className="text-sm">
-                    <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">QuickBooks</div>
+                    <div className="text-xs font-semibold text-green-600 uppercase tracking-wide mb-1">QuickBooks</div>
                     <dl className="space-y-0.5">
                       <div>
                         <dt className="text-muted-foreground inline">Invoice: </dt>
@@ -345,12 +378,33 @@ function BillRow({
                         <dt className="text-muted-foreground inline">Bill: </dt>
                         <dd className="inline font-mono">{bill.qboBillNum || '-'}</dd>
                       </div>
+                      {detailsLoading ? (
+                        <div className="flex items-center gap-1 text-muted-foreground">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          <span className="text-xs">Loading...</span>
+                        </div>
+                      ) : details ? (
+                        <>
+                          <div>
+                            <dt className="text-muted-foreground inline">Bill Due: </dt>
+                            <dd className="inline font-medium">{formatDate(details.qboBillDueDate)}</dd>
+                          </div>
+                          <div>
+                            <dt className="text-muted-foreground inline">Paid: </dt>
+                            <dd className={`inline font-medium ${details.qboPaidDate ? 'text-green-600' : ''}`}>
+                              {details.qboPaidDate ? formatDate(details.qboPaidDate) : '-'}
+                            </dd>
+                          </div>
+                        </>
+                      ) : null}
                     </dl>
                   </div>
 
-                  {/* Bill.com or Wise */}
+                  {/* Wise (CA) or Bill.com (US) */}
                   <div className="text-sm">
-                    <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">
+                    <div className={`text-xs font-semibold uppercase tracking-wide mb-1 ${
+                      bill.tenantCode === 'CA' ? 'text-teal-600' : 'text-sky-600'
+                    }`}>
                       {bill.tenantCode === 'US' ? 'Bill.com' : 'Wise'}
                     </div>
                     <dl className="space-y-0.5">
@@ -360,13 +414,64 @@ function BillRow({
                           <dd className="inline font-mono">{bill.billComId || '-'}</dd>
                         </div>
                       ) : (
-                        <div>
-                          <dt className="text-muted-foreground inline">Payment: </dt>
-                          <dd className="inline">CAD transfer</dd>
-                        </div>
+                        <>
+                          {details?.wiseRecipientName ? (
+                            <>
+                              <div>
+                                <dt className="text-muted-foreground inline">Recipient: </dt>
+                                <dd className="inline font-medium">{details.wiseRecipientName}</dd>
+                              </div>
+                              <div>
+                                <dt className="text-muted-foreground inline">Method: </dt>
+                                <dd className="inline font-medium capitalize">{details.wisePaymentMethod?.replace(/-/g, ' ') || '-'}</dd>
+                              </div>
+                            </>
+                          ) : detailsLoading ? (
+                            <div className="flex items-center gap-1 text-muted-foreground">
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                              <span className="text-xs">Loading...</span>
+                            </div>
+                          ) : (
+                            <div>
+                              <dt className="text-muted-foreground inline">Payment: </dt>
+                              <dd className="inline">CAD transfer</dd>
+                            </div>
+                          )}
+                        </>
                       )}
                     </dl>
                   </div>
+
+                  {/* Payment History + Aging */}
+                  {(details?.lastPayment || bill.trxDate) && (
+                    <div className="text-sm">
+                      <div className="text-xs font-semibold text-red-600 uppercase tracking-wide mb-1">Payment History</div>
+                      <dl className="space-y-0.5">
+                        {details?.lastPayment && (
+                          <div>
+                            <dt className="text-muted-foreground inline">Last Paid: </dt>
+                            <dd className="inline font-medium">
+                              {formatDate(details.lastPayment.paidAt)} — ${details.lastPayment.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </dd>
+                          </div>
+                        )}
+                        {(() => {
+                          const aging = getAgingInfo(bill.trxDate);
+                          if (!aging) return null;
+                          return (
+                            <div>
+                              <dt className="text-muted-foreground inline">Aging: </dt>
+                              <dd className="inline">
+                                <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${aging.bgColor} ${aging.color}`}>
+                                  {aging.days} days
+                                </span>
+                              </dd>
+                            </div>
+                          );
+                        })()}
+                      </dl>
+                    </div>
+                  )}
 
                   {/* Description */}
                   {bill.description && (
@@ -388,13 +493,17 @@ function BillRow({
 function PayeeGroupRow({
   group,
   controlStates,
+  detailsCache,
   onPay,
   onDismiss,
+  onLoadDetails,
 }: {
   group: PayeeGroup;
   controlStates: Map<string, BillControlState>;
+  detailsCache: Map<string, BillDetails>;
   onPay?: (bill: Bill) => void;
   onDismiss?: (bill: Bill) => void;
+  onLoadDetails?: (billId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -441,6 +550,9 @@ function PayeeGroupRow({
           key={bill.uid}
           bill={bill}
           controlState={controlStates.get(bill.uid)}
+          details={detailsCache.get(bill.uid)}
+          detailsLoading={!detailsCache.has(bill.uid) && false}
+          onExpand={onLoadDetails}
           onPay={onPay}
           onDismiss={onDismiss}
           indented
@@ -454,13 +566,17 @@ function PayeeGroupRow({
 function ListView({
   bills,
   controlStates,
+  detailsCache,
   onPayBill,
   onDismissBill,
+  onLoadDetails,
 }: {
   bills: Bill[];
   controlStates: Map<string, BillControlState>;
+  detailsCache: Map<string, BillDetails>;
   onPayBill?: (bill: Bill) => void;
   onDismissBill?: (bill: Bill) => void;
+  onLoadDetails?: (billId: string) => void;
 }) {
   return (
     <table className="w-full">
@@ -482,6 +598,9 @@ function ListView({
             key={bill.uid}
             bill={bill}
             controlState={controlStates.get(bill.uid)}
+            details={detailsCache.get(bill.uid)}
+            detailsLoading={!detailsCache.has(bill.uid) && false}
+            onExpand={onLoadDetails}
             onPay={onPayBill}
             onDismiss={onDismissBill}
           />
@@ -495,13 +614,17 @@ function ListView({
 function GroupedView({
   bills,
   controlStates,
+  detailsCache,
   onPayBill,
   onDismissBill,
+  onLoadDetails,
 }: {
   bills: Bill[];
   controlStates: Map<string, BillControlState>;
+  detailsCache: Map<string, BillDetails>;
   onPayBill?: (bill: Bill) => void;
   onDismissBill?: (bill: Bill) => void;
+  onLoadDetails?: (billId: string) => void;
 }) {
   const groups = useMemo(() => {
     const groupMap = new Map<string, Bill[]>();
@@ -539,8 +662,10 @@ function GroupedView({
             key={group.payeeName}
             group={group}
             controlStates={controlStates}
+            detailsCache={detailsCache}
             onPay={onPayBill}
             onDismiss={onDismissBill}
+            onLoadDetails={onLoadDetails}
           />
         ))}
       </tbody>
@@ -548,7 +673,7 @@ function GroupedView({
   );
 }
 
-export function BillsList({ bills, loading, error, viewMode, controlStates, onPayBill, onDismissBill }: BillsListProps) {
+export function BillsList({ bills, loading, error, viewMode, controlStates, detailsCache, onPayBill, onDismissBill, onLoadDetails }: BillsListProps) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -579,9 +704,9 @@ export function BillsList({ bills, loading, error, viewMode, controlStates, onPa
   return (
     <div className="overflow-x-auto">
       {viewMode === 'list' ? (
-        <ListView bills={bills} controlStates={controlStates} onPayBill={onPayBill} onDismissBill={onDismissBill} />
+        <ListView bills={bills} controlStates={controlStates} detailsCache={detailsCache} onPayBill={onPayBill} onDismissBill={onDismissBill} onLoadDetails={onLoadDetails} />
       ) : (
-        <GroupedView bills={bills} controlStates={controlStates} onPayBill={onPayBill} onDismissBill={onDismissBill} />
+        <GroupedView bills={bills} controlStates={controlStates} detailsCache={detailsCache} onPayBill={onPayBill} onDismissBill={onDismissBill} onLoadDetails={onLoadDetails} />
       )}
     </div>
   );
