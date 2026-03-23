@@ -555,17 +555,19 @@ export class WiseClient {
   }
 
   /**
-   * Discover a Wise contact by email using the Contact Discovery API.
-   * This finds an existing Wise profile by identifier and creates a proper
-   * contact linkage — enabling direct Wise-to-Wise transfers (no claim links).
+   * Discover a Wise contact by identifier using the Contact Discovery API.
+   * Accepts a Wise tag (@handle), email, or phone number.
+   * Wise tags are preferred — they unambiguously target a specific business profile.
+   * Emails may fail if the address maps to multiple Wise profiles.
    *
-   * @param email The email address to discover
+   * @param identifier Wise tag (e.g. "@fluxcioinc"), email, or phone number
+   * @param targetCurrency Currency for the transfer (e.g. "CAD")
    * @returns The discovered contact with its UUID, or null if not found
    */
-  async discoverContact(email: string): Promise<{ id: string; name: string } | null> {
+  async discoverContact(identifier: string, targetCurrency: string = 'CAD'): Promise<{ id: string; name: string } | null> {
     const profileId = await this.getBusinessProfileId();
 
-    console.log(`[Wise] Discovering contact by email: ${email}`);
+    console.log(`[Wise] Discovering contact by identifier: ${identifier}`);
 
     try {
       const contact = await this.request<{
@@ -573,10 +575,8 @@ export class WiseClient {
         name: string;
         active: boolean;
       }>('POST', `/v2/profiles/${profileId}/contacts?isDirectIdentifierCreation=true`, {
-        identifier: {
-          type: 'EMAIL',
-          value: email,
-        },
+        identifier,
+        targetCurrency,
       });
 
       if (contact) {
@@ -584,10 +584,10 @@ export class WiseClient {
         return { id: contact.id, name: contact.name };
       }
 
-      console.log(`[Wise] No Wise account found for email: ${email}`);
+      console.log(`[Wise] No Wise account found for identifier: ${identifier}`);
       return null;
     } catch (err) {
-      console.log(`[Wise] Contact discovery failed for ${email}:`, err);
+      console.log(`[Wise] Contact discovery failed for ${identifier}:`, err);
       return null;
     }
   }
