@@ -69,7 +69,7 @@ function Dashboard() {
     fetch('/api/health').then(r => r.json()).then(d => setApiStartedAt(d.startedAt)).catch(() => {});
   }, []);
 
-  useEffect(() => {
+  const refreshWiseBalance = useCallback(() => {
     if (tenantFilter === 'CA') {
       api.getWiseBalance().then(data => {
         const cad = data.balances.find(b => b.currency === 'CAD');
@@ -79,6 +79,10 @@ function Dashboard() {
       setWiseBalance(null);
     }
   }, [tenantFilter]);
+
+  useEffect(() => {
+    refreshWiseBalance();
+  }, [refreshWiseBalance]);
 
   const handleDismissBill = (bill: Bill) => {
     setPendingDismissBill(bill);
@@ -149,8 +153,9 @@ function Dashboard() {
           billId: bill.uid,
           errorStatus: null,
         });
-        // Refresh bills list after successful payment
+        // Refresh bills list and balance after successful payment
         await refresh();
+        refreshWiseBalance();
       } else {
         setPaymentStatus({
           loading: false,
