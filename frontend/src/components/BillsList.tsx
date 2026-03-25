@@ -144,6 +144,8 @@ interface BillsListProps {
   onPayBill?: (bill: Bill) => void;
   onDismissBill?: (bill: Bill) => void;
   onLoadDetails?: (billId: string) => void;
+  tenantFilter?: 'all' | 'US' | 'CA';
+  wiseBalance?: number | null;
 }
 
 interface PayeeGroup {
@@ -673,7 +675,7 @@ function GroupedView({
   );
 }
 
-export function BillsList({ bills, loading, error, viewMode, controlStates, detailsCache, onPayBill, onDismissBill, onLoadDetails }: BillsListProps) {
+export function BillsList({ bills, loading, error, viewMode, controlStates, detailsCache, onPayBill, onDismissBill, onLoadDetails, tenantFilter, wiseBalance }: BillsListProps) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -701,12 +703,33 @@ export function BillsList({ bills, loading, error, viewMode, controlStates, deta
     );
   }
 
+  const totalAmount = bills.reduce((sum, b) => sum + b.amount, 0);
+  const formatCurrency = (amount: number) =>
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
+
   return (
     <div className="overflow-x-auto">
       {viewMode === 'list' ? (
         <ListView bills={bills} controlStates={controlStates} detailsCache={detailsCache} onPayBill={onPayBill} onDismissBill={onDismissBill} onLoadDetails={onLoadDetails} />
       ) : (
         <GroupedView bills={bills} controlStates={controlStates} detailsCache={detailsCache} onPayBill={onPayBill} onDismissBill={onDismissBill} onLoadDetails={onLoadDetails} />
+      )}
+      {bills.length > 0 && (
+        <div className="flex items-center justify-between px-4 py-3 border-t bg-muted/30 text-sm">
+          <span className="text-muted-foreground">
+            {bills.length} {bills.length === 1 ? 'bill' : 'bills'} &middot; <span className="font-semibold text-foreground">{formatCurrency(totalAmount)}</span> total
+          </span>
+          {tenantFilter === 'CA' && wiseBalance != null && (
+            <span className="flex items-center gap-2">
+              <span className="text-muted-foreground">Wise CAD: <span className="font-semibold text-foreground">{formatCurrency(wiseBalance)}</span></span>
+              {wiseBalance >= totalAmount ? (
+                <span className="flex items-center gap-1 text-green-600 font-medium"><Check className="h-4 w-4" /> Covered</span>
+              ) : (
+                <span className="flex items-center gap-1 text-red-600 font-medium"><X className="h-4 w-4" /> Short {formatCurrency(totalAmount - wiseBalance)}</span>
+              )}
+            </span>
+          )}
+        </div>
       )}
     </div>
   );

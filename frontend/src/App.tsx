@@ -34,6 +34,7 @@ function Dashboard() {
   const [apiStartedAt, setApiStartedAt] = useState<string | null>(null);
   const [billDetailsCache, setBillDetailsCache] = useState<Map<string, BillDetails>>(new Map());
   const [detailsLoading, setDetailsLoading] = useState<Set<string>>(new Set());
+  const [wiseBalance, setWiseBalance] = useState<number | null>(null);
 
   const loadDismissedBills = async () => {
     try {
@@ -67,6 +68,17 @@ function Dashboard() {
     loadDismissedBills();
     fetch('/api/health').then(r => r.json()).then(d => setApiStartedAt(d.startedAt)).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (tenantFilter === 'CA') {
+      api.getWiseBalance().then(data => {
+        const cad = data.balances.find(b => b.currency === 'CAD');
+        setWiseBalance(cad ? cad.amount : null);
+      }).catch(() => setWiseBalance(null));
+    } else {
+      setWiseBalance(null);
+    }
+  }, [tenantFilter]);
 
   const handleDismissBill = (bill: Bill) => {
     setPendingDismissBill(bill);
@@ -378,6 +390,8 @@ function Dashboard() {
             onLoadDetails={handleLoadDetails}
             onPayBill={handlePayBill}
             onDismissBill={handleDismissBill}
+            tenantFilter={tenantFilter}
+            wiseBalance={wiseBalance}
           />
         </div>
 
