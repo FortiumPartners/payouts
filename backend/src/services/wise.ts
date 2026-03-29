@@ -84,6 +84,7 @@ export interface WiseQuote {
   targetCurrency: string;
   sourceAmount: number;
   targetAmount: number;
+  targetAccount: number; // Resolved recipient account ID (populated when contactId is used)
   rate: number;
   fee: number;
   paymentOptions: Array<{
@@ -470,56 +471,6 @@ export class WiseClient {
     return this.request<WiseContact>('GET', `/v1/accounts/${contactId}`);
   }
 
-  /**
-   * Get recipient accounts for a contact by UUID.
-   * For Wise-to-Wise contacts, this returns their payable accounts.
-   */
-  async getContactAccounts(contactUuid: string): Promise<{ id: number; currency: string; type: string }[]> {
-    const profileId = await this.getBusinessProfileId();
-    console.log(`[Wise] Fetching accounts for contact ${contactUuid}`);
-
-    try {
-      const response = await this.request<{
-        content: Array<{
-          id: number;
-          currency: string;
-          type: string;
-          details?: { accountNumber?: string };
-        }>;
-      }>('GET', `/v2/profiles/${profileId}/contacts/${contactUuid}/accounts`);
-
-      const accounts = response?.content || [];
-      console.log(`[Wise] Found ${accounts.length} account(s) for contact ${contactUuid}`);
-      return accounts.map(a => ({ id: a.id, currency: a.currency, type: a.type }));
-    } catch (err) {
-      console.log(`[Wise] No accounts found for contact ${contactUuid}:`, err);
-      return [];
-    }
-  }
-
-  /**
-   * Find recipient account ID for a contact, given the contact UUID and currency.
-   * Used for Wise-to-Wise transfers.
-   */
-  async findRecipientAccountForContact(contactUuid: string, currency: string): Promise<number | null> {
-    const accounts = await this.getContactAccounts(contactUuid);
-
-    // Find account matching the currency
-    const account = accounts.find(a => a.currency === currency);
-    if (account) {
-      console.log(`[Wise] Found ${currency} account ${account.id} for contact ${contactUuid}`);
-      return account.id;
-    }
-
-    // If no exact match, try to find any account
-    if (accounts.length > 0) {
-      console.log(`[Wise] No ${currency} account, using first account ${accounts[0].id} for contact ${contactUuid}`);
-      return accounts[0].id;
-    }
-
-    console.log(`[Wise] No accounts found for contact ${contactUuid}`);
-    return null;
-  }
 
   /**
    * Create an email recipient for Wise-to-Wise transfers.
@@ -693,8 +644,6 @@ export class WiseClient {
     targetAccountId: number,
     reference: string
   ): Promise<WiseTransfer> {
-    const profileId = await this.getBusinessProfileId();
-
     console.log(`[Wise] Creating transfer: quote=${quoteId}, recipient=${targetAccountId}, ref=${reference}`);
 
     const transfer = await this.request<WiseTransfer>('POST', `/v1/transfers`, {
@@ -711,36 +660,6 @@ export class WiseClient {
     return transfer;
   }
 
-  /**
-   * Create a transfer for Wise-to-Wise contacts.
-   * @param quoteId Quote ID from createQuote (must have targetContactId embedded)
-   * @param targetAccountId Recipient account ID from getContactAccounts/findRecipientAccountForContact
-   * @param reference Payment reference (max 10 chars)
-   */
-  async createTransferFromQuote(
-    quoteId: string,
-    targetAccountId: number,
-    reference: string
-  ): Promise<WiseTransfer> {
-    console.log(`[Wise] Creating Wise-to-Wise transfer: quote=${quoteId}, targetAccount=${targetAccountId}, ref=${reference}`);
-
-    const transfer = await this.request<WiseTransfer>('POST', `/v1/transfers`, {
-      targetAccount: targetAccountId,
-      quoteUuid: quoteId,
-      customerTransactionId: crypto.randomUUID(),
-      details: {
-        reference: reference.substring(0, 10),
-        sourceOfFunds: 'verification.source.of.funds.other',
-      },
-    });
-
-    if (!transfer) {
-      throw new WiseError('Failed to create transfer - API returned empty response');
-    }
-
-    console.log(`[Wise] Wise-to-Wise transfer created: ${transfer.id}, status: ${transfer.status}`);
-    return transfer;
-  }
 
   /**
    * Fund a transfer from the Wise balance.

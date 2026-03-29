@@ -469,79 +469,107 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
         const reference = `${bill.externalInvoiceDocNum || bill.uid}-${lastName}`.substring(0, 10);
 
         // =====================================================================
-        // DETERMINISTIC ROUTING: wiseRecipientAccountId is the ONLY source of truth.
-        // No fuzzy matching, no fallback cascades. If the account ID isn't set,
-        // the operator must resolve it on the Wise Recipients page first.
+        // PAYMENT ROUTING PRIORITY:
+        // 1. Contact-based (Wise-to-Wise): wiseContactId → quote with contactId → transfer
+        // 2. Bank account (v1): wiseRecipientAccountId → quote → transfer
+        // Contact path is preferred: instant B2B transfers, no bank details needed.
         // =====================================================================
 
-        const wiseAccountId = recipient.wiseRecipientAccountId;
+        let quote;
+        let transfer;
 
-        if (!wiseAccountId) {
+        if (recipient.wiseContactId) {
+          // --- WISE-TO-WISE CONTACT PATH ---
+          // Quote resolves contactId into targetAccount automatically (per Wise support)
+          fastify.log.info({
+            contactId: recipient.wiseContactId,
+            payeeName: bill.resourceName,
+          }, 'Wise-to-Wise payment routing: using contact');
+
+          quote = await wise.createQuote('CAD', recipient.targetCurrency, bill.adjustedBillPayment, recipient.wiseContactId);
+
+          if (!quote.targetAccount) {
+            return reply.status(400).send({
+              success: false,
+              billId,
+              amount: bill.adjustedBillPayment,
+              status: 'contact_resolve_failed',
+              message: `Wise could not resolve a payable account for contact "${bill.resourceName}" (${recipient.wiseContactId}). The recipient may need to set up their Wise Business account.`,
+            });
+          }
+
+          transfer = await wise.createTransfer(quote.id, quote.targetAccount, reference);
+
+        } else if (recipient.wiseRecipientAccountId) {
+          // --- BANK ACCOUNT PATH (v1) ---
+          const wiseAccountId = recipient.wiseRecipientAccountId;
+
+          // Validate the account still exists in Wise
+          const accountDetails = await wise.getRecipientDetails(wiseAccountId);
+          if (!accountDetails) {
+            return reply.status(400).send({
+              success: false,
+              billId,
+              amount: bill.adjustedBillPayment,
+              status: 'invalid_account',
+              message: `Wise account ${wiseAccountId} no longer exists for "${bill.resourceName}". Re-resolve on Wise Recipients page.`,
+            });
+          }
+
+          // For email-type accounts, ensure address is present (enrich from PC if needed)
+          if (accountDetails.type === 'email') {
+            const hasAddress = accountDetails.details?.address?.country &&
+              accountDetails.details?.address?.city &&
+              accountDetails.details?.address?.firstLine;
+
+            if (!hasAddress) {
+              const pcUser = await pcClient.getUser(bill.resourceUid);
+              const countryMap: Record<string, string> = {
+                'Canada': 'CA', 'United States': 'US', 'USA': 'US',
+              };
+
+              if (pcUser?.Address1 && pcUser?.City && pcUser?.Country) {
+                const countryCode = countryMap[pcUser.Country] || pcUser.Country;
+                await wise.updateRecipientAddress(wiseAccountId, {
+                  country: countryCode,
+                  city: pcUser.City,
+                  postCode: pcUser.PostalCode || pcUser.Zip || '',
+                  firstLine: pcUser.Address1 + (pcUser.Address2 ? `, ${pcUser.Address2}` : ''),
+                });
+                fastify.log.info({
+                  accountId: wiseAccountId,
+                  payeeName: bill.resourceName,
+                }, 'Enriched Wise recipient address from PartnerConnect');
+              } else {
+                return reply.status(400).send({
+                  success: false,
+                  billId,
+                  amount: bill.adjustedBillPayment,
+                  status: 'missing_address',
+                  message: `Wise requires a mailing address for email recipients. Please add an address for "${bill.resourceName}" in PartnerConnect and retry.`,
+                });
+              }
+            }
+          }
+
+          fastify.log.info({
+            wiseAccountId,
+            accountType: accountDetails.type,
+            payeeName: bill.resourceName,
+          }, 'Bank account payment routing: using verified wiseRecipientAccountId');
+
+          quote = await wise.createQuote('CAD', recipient.targetCurrency, bill.adjustedBillPayment);
+          transfer = await wise.createTransfer(quote.id, wiseAccountId, reference);
+
+        } else {
           return reply.status(400).send({
             success: false,
             billId,
             amount: bill.adjustedBillPayment,
             status: 'no_account',
-            message: `No verified Wise account for "${bill.resourceName}". Go to Wise Recipients and resolve the account mapping.`,
+            message: `No Wise contact or bank account for "${bill.resourceName}". Go to Wise Recipients and resolve the account mapping.`,
           });
         }
-
-        // Validate the account still exists in Wise
-        const accountDetails = await wise.getRecipientDetails(wiseAccountId);
-        if (!accountDetails) {
-          return reply.status(400).send({
-            success: false,
-            billId,
-            amount: bill.adjustedBillPayment,
-            status: 'invalid_account',
-            message: `Wise account ${wiseAccountId} no longer exists for "${bill.resourceName}". Re-resolve on Wise Recipients page.`,
-          });
-        }
-
-        // For email-type accounts, ensure address is present (enrich from PC if needed)
-        if (accountDetails.type === 'email') {
-          const hasAddress = accountDetails.details?.address?.country &&
-            accountDetails.details?.address?.city &&
-            accountDetails.details?.address?.firstLine;
-
-          if (!hasAddress) {
-            const pcUser = await pcClient.getUser(bill.resourceUid);
-            const countryMap: Record<string, string> = {
-              'Canada': 'CA', 'United States': 'US', 'USA': 'US',
-            };
-
-            if (pcUser?.Address1 && pcUser?.City && pcUser?.Country) {
-              const countryCode = countryMap[pcUser.Country] || pcUser.Country;
-              await wise.updateRecipientAddress(wiseAccountId, {
-                country: countryCode,
-                city: pcUser.City,
-                postCode: pcUser.PostalCode || pcUser.Zip || '',
-                firstLine: pcUser.Address1 + (pcUser.Address2 ? `, ${pcUser.Address2}` : ''),
-              });
-              fastify.log.info({
-                accountId: wiseAccountId,
-                payeeName: bill.resourceName,
-              }, 'Enriched Wise recipient address from PartnerConnect');
-            } else {
-              return reply.status(400).send({
-                success: false,
-                billId,
-                amount: bill.adjustedBillPayment,
-                status: 'missing_address',
-                message: `Wise requires a mailing address for email recipients. Please add an address for "${bill.resourceName}" in PartnerConnect and retry.`,
-              });
-            }
-          }
-        }
-
-        fastify.log.info({
-          wiseAccountId,
-          accountType: accountDetails.type,
-          payeeName: bill.resourceName,
-        }, 'Deterministic payment routing: using verified wiseRecipientAccountId');
-
-        const quote = await wise.createQuote('CAD', recipient.targetCurrency, bill.adjustedBillPayment);
-        const transfer = await wise.createTransfer(quote.id, wiseAccountId, reference);
 
         // Fund the transfer from Wise balance
         const fundResult = await wise.fundTransfer(transfer.id);
