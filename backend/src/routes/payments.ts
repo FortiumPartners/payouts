@@ -478,29 +478,39 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
         let quote;
         let transfer;
 
+        let usedContactPath = false;
+
         if (recipient.wiseContactId) {
           // --- WISE-TO-WISE CONTACT PATH ---
           // Quote resolves contactId into targetAccount automatically (per Wise support)
           fastify.log.info({
             contactId: recipient.wiseContactId,
             payeeName: bill.resourceName,
-          }, 'Wise-to-Wise payment routing: using contact');
+          }, 'Wise-to-Wise payment routing: attempting contact path');
 
-          quote = await wise.createQuote('CAD', recipient.targetCurrency, bill.adjustedBillPayment, recipient.wiseContactId);
+          try {
+            quote = await wise.createQuote('CAD', recipient.targetCurrency, bill.adjustedBillPayment, recipient.wiseContactId);
 
-          if (!quote.targetAccount) {
-            return reply.status(400).send({
-              success: false,
-              billId,
-              amount: bill.adjustedBillPayment,
-              status: 'contact_resolve_failed',
-              message: `Wise could not resolve a payable account for contact "${bill.resourceName}" (${recipient.wiseContactId}). The recipient may need to set up their Wise Business account.`,
-            });
+            if (quote.targetAccount) {
+              transfer = await wise.createTransfer(quote.id, quote.targetAccount, reference);
+              usedContactPath = true;
+            } else {
+              fastify.log.warn({
+                contactId: recipient.wiseContactId,
+                payeeName: bill.resourceName,
+              }, 'Contact quote missing targetAccount — falling back to bank account');
+              quote = undefined; // Reset so bank account path creates its own quote
+            }
+          } catch (err) {
+            fastify.log.warn({
+              contactId: recipient.wiseContactId,
+              payeeName: bill.resourceName,
+              error: (err as Error).message,
+            }, 'Contact path failed — falling back to bank account');
           }
+        }
 
-          transfer = await wise.createTransfer(quote.id, quote.targetAccount, reference);
-
-        } else if (recipient.wiseRecipientAccountId) {
+        if (!usedContactPath && recipient.wiseRecipientAccountId) {
           // --- BANK ACCOUNT PATH (v1) ---
           const wiseAccountId = recipient.wiseRecipientAccountId;
 
@@ -561,7 +571,9 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
           quote = await wise.createQuote('CAD', recipient.targetCurrency, bill.adjustedBillPayment);
           transfer = await wise.createTransfer(quote.id, wiseAccountId, reference);
 
-        } else {
+        }
+
+        if (!transfer) {
           return reply.status(400).send({
             success: false,
             billId,
