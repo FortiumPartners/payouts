@@ -18,7 +18,7 @@ function Dashboard() {
   const [tenantFilter, setTenantFilter] = useState<'all' | 'US' | 'CA'>('all');
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const { bills, summary, loading, error, refresh } = useBills({ status: statusFilter, tenant: tenantFilter });
-  const { controlStates, isChecking, getBillWithControls } = useBillControls(bills);
+  const { controlStates, isChecking, getBillWithControls, resetControls } = useBillControls(bills);
   const [refreshing, setRefreshing] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState<{
     loading: boolean;
@@ -126,6 +126,7 @@ function Dashboard() {
 
   const handleRefresh = async () => {
     setRefreshing(true);
+    resetControls();
     await refresh();
     setRefreshing(false);
   };

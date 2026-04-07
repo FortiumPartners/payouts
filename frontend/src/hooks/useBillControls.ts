@@ -20,6 +20,7 @@ interface UseBillControlsResult {
   isChecking: boolean;
   checkControls: (billIds: string[]) => Promise<void>;
   getBillWithControls: (bill: Bill) => Bill;
+  resetControls: () => void;
 }
 
 const BATCH_SIZE = 10; // Check 10 bills at a time
@@ -124,10 +125,17 @@ export function useBillControls(bills: Bill[]): UseBillControlsResult {
     };
   }, [controlStates]);
 
+  // Reset all control state so controls are re-checked on next bill load
+  const resetControls = useCallback(() => {
+    checkedRef.current.clear();
+    setControlStates(new Map());
+  }, []);
+
   return {
     controlStates,
     isChecking,
     checkControls,
     getBillWithControls,
+    resetControls,
   };
 }
