@@ -485,20 +485,30 @@ export class WiseClient {
   async createEmailRecipient(
     name: string,
     email: string,
-    currency: string
+    currency: string,
+    address?: {
+      country: string;
+      state?: string;
+      city: string;
+      postCode: string;
+      firstLine: string;
+    }
   ): Promise<number> {
     const profileId = await this.getBusinessProfileId();
 
-    console.log(`[Wise] Creating email recipient: ${name} (${email}) for ${currency}`);
+    console.log(`[Wise] Creating email recipient: ${name} (${email}) for ${currency}${address ? ' with address' : ''}`);
+
+    const details: Record<string, unknown> = { email };
+    if (address) {
+      details.address = address;
+    }
 
     const account = await this.request<{ id: number }>('POST', '/v1/accounts', {
       profile: profileId,
       accountHolderName: name,
       currency,
       type: 'email',
-      details: {
-        email,
-      },
+      details,
     });
 
     console.log(`[Wise] Email recipient created: ${account.id}`);

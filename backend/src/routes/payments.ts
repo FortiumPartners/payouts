@@ -574,13 +574,81 @@ export const paymentsRoutes: FastifyPluginAsync = async (fastify) => {
         }
 
         if (!transfer) {
-          return reply.status(400).send({
-            success: false,
-            billId,
-            amount: bill.adjustedBillPayment,
-            status: 'no_account',
-            message: `No Wise contact or bank account for "${bill.resourceName}". Go to Wise Recipients and resolve the account mapping.`,
-          });
+          // Auto-create an email-type Wise recipient as a fallback.
+          // The payee will receive a claim link via email.
+          const payeeWiseEmail = recipient.wiseEmail;
+          if (!payeeWiseEmail) {
+            return reply.status(400).send({
+              success: false,
+              billId,
+              amount: bill.adjustedBillPayment,
+              status: 'no_account',
+              message: `No Wise contact, bank account, or email for "${bill.resourceName}". Go to Wise Recipients and resolve the account mapping.`,
+            });
+          }
+
+          try {
+            // Get address from PartnerConnect (Wise requires address for email recipients)
+            const pcUser = await pcClient.getUser(bill.resourceUid);
+            const countryMap: Record<string, string> = {
+              'Canada': 'CA', 'United States': 'US', 'USA': 'US',
+            };
+
+            if (!pcUser?.Address1 || !pcUser?.City || !pcUser?.Country) {
+              return reply.status(400).send({
+                success: false,
+                billId,
+                amount: bill.adjustedBillPayment,
+                status: 'missing_address',
+                message: `Wise requires a mailing address for email recipients. Please add an address for "${bill.resourceName}" in PartnerConnect and retry.`,
+              });
+            }
+
+            const countryCode = countryMap[pcUser.Country] || pcUser.Country;
+
+            const newAccountId = await wise.createEmailRecipient(
+              bill.resourceName,
+              payeeWiseEmail,
+              recipient.targetCurrency,
+              {
+                country: countryCode,
+                state: pcUser.State || '',
+                city: pcUser.City,
+                postCode: pcUser.PostalCode || pcUser.Zip || '',
+                firstLine: pcUser.Address1 + (pcUser.Address2 ? `, ${pcUser.Address2}` : ''),
+              }
+            );
+
+            // Update the DB record with the new account ID
+            await prisma.wiseRecipient.update({
+              where: { qboVendorId: bill.qboVendorId! },
+              data: { wiseRecipientAccountId: newAccountId },
+            });
+
+            // Create quote and transfer using the new account
+            quote = await wise.createQuote('CAD', recipient.targetCurrency, bill.adjustedBillPayment);
+            transfer = await wise.createTransfer(quote.id, newAccountId, reference);
+
+            fastify.log.info({
+              accountId: newAccountId,
+              payeeName: bill.resourceName,
+              email: payeeWiseEmail,
+            }, 'Auto-created email recipient for payment — payee will receive claim link');
+          } catch (autoCreateErr) {
+            fastify.log.error({
+              err: autoCreateErr,
+              payeeName: bill.resourceName,
+              email: payeeWiseEmail,
+            }, 'Failed to auto-create email recipient');
+
+            return reply.status(400).send({
+              success: false,
+              billId,
+              amount: bill.adjustedBillPayment,
+              status: 'no_account',
+              message: `No Wise contact or bank account for "${bill.resourceName}", and auto-creating email recipient failed: ${(autoCreateErr as Error).message}`,
+            });
+          }
         }
 
         // Fund the transfer from Wise balance
